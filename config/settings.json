@@ -1,0 +1,16 @@
+{
+  "model_repo": "Qwen/Qwen3-8B",
+  "model_revision": "b968826d9c46dd6066d109eabc6255188de91218",
+  "model_dir": "models/Qwen3-8B",
+  "served_model": "qwen3-8b-local",
+  "gpu": 3,
+  "port": 8003,
+  "context_length": 8192,
+  "gpu_memory_utilization": 0.5,
+  "max_tokens": 1200,
+  "temperature": 0.2,
+  "timeout_seconds": 180,
+  "max_iterations": 2,
+  "simulation_backend": "mock",
+  "specification": {"circuit": "two_stage_cmos_opamp", "vdd_v": 1.8, "load_pf": 5.0, "gain_db_min": 65, "ugb_mhz_min": 10, "phase_margin_deg_min": 60, "power_mw_max": 1.0}
+}

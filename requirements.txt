@@ -1,0 +1,7 @@
+vllm==0.8.5
+transformers==4.51.3
+huggingface-hub==0.30.2
+openai==1.78.1
+numpy==1.26.4
+reportlab==4.4.1
+pytest==8.3.5

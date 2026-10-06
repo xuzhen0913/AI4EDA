@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+export PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+export SHARED_TOOLS_ROOT="/home/xu"
+export PROJECT_VENV="$SHARED_TOOLS_ROOT/.venv"
+export PROJECT_PYTHON="$PROJECT_VENV/bin/python"
+export PROJECT_UV="$SHARED_TOOLS_ROOT/.runtime/tools/bin/uv"
+export TMPDIR="$PROJECT_ROOT/.runtime/tmp"
+export TMP="$TMPDIR" TEMP="$TMPDIR"
+export XDG_CACHE_HOME="$PROJECT_ROOT/.runtime/cache"
+export XDG_CONFIG_HOME="$PROJECT_ROOT/.runtime/config"
+export XDG_DATA_HOME="$PROJECT_ROOT/.runtime/data"
+export XDG_STATE_HOME="$PROJECT_ROOT/.runtime/state"
+export UV_CACHE_DIR="$XDG_CACHE_HOME/uv"
+export UV_PYTHON_INSTALL_DIR="$SHARED_TOOLS_ROOT/.runtime/python"
+export UV_PYTHON_BIN_DIR="$SHARED_TOOLS_ROOT/.runtime/bin"
+export PIP_CACHE_DIR="$XDG_CACHE_HOME/pip"
+export OUTLINES_CACHE_DIR="$XDG_CACHE_HOME/outlines"
+export HF_HOME="$XDG_CACHE_HOME/huggingface"
+export HF_HUB_DISABLE_IMPLICIT_TOKEN=1 HF_HUB_DISABLE_TELEMETRY=1
+export TORCH_HOME="$XDG_CACHE_HOME/torch"
+export TORCH_EXTENSIONS_DIR="$XDG_CACHE_HOME/torch_extensions"
+export TRITON_CACHE_DIR="$XDG_CACHE_HOME/triton"
+export CUDA_CACHE_PATH="$XDG_CACHE_HOME/cuda"
+export VLLM_CACHE_ROOT="$XDG_CACHE_HOME/vllm"
+export VLLM_CONFIG_ROOT="$PROJECT_ROOT/.runtime/config/vllm"
+export NUMBA_CACHE_DIR="$XDG_CACHE_HOME/numba"
+export MPLCONFIGDIR="$XDG_CACHE_HOME/matplotlib"
+export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
+export VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1 ANONYMIZED_TELEMETRY=False
+export OMP_NUM_THREADS=4 TOKENIZERS_PARALLELISM=false
+export NCCL_SHM_DISABLE=1 VLLM_HOST_IP=127.0.0.1
+export PYTHONPATH="$PROJECT_ROOT"
+mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"

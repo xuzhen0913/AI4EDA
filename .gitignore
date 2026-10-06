@@ -1,0 +1,26 @@
+# Models and runtime caches
+/models/
+/.runtime/
+
+# Logs and experiment outputs
+/logs/
+/outputs/
+
+# Python caches
+/.pytest_cache/
+__pycache__/
+*.py[cod]
+
+# Generated documentation artifacts
+/docs/USER_GUIDE.extracted.txt
+/docs/guide-page*.png
+/docs/guide/preview-*.png
+/docs/guide/final-*.png
+/docs/guide/USER_GUIDE.bounds.html
+/docs/guide/USER_GUIDE.layout.txt
+/docs/guide/build.log
+/docs/guide/document_checks.json
+/docs/guide/example_checks.json
+/docs/guide/source_manifest.json
+/docs/guide/annotations.json
+EOF
