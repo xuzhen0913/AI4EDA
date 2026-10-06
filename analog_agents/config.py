@@ -16,6 +16,4 @@ def load_config():
     assert 1024 <= cfg["port"] <= 65535
     assert 0.1 <= cfg["gpu_memory_utilization"] <= 0.6
     assert 1024 <= cfg["context_length"] <= 32768
-    assert 1 <= cfg["max_iterations"] <= 10
-    assert cfg["simulation_backend"] == "mock", "Only explicitly labeled mock backend is implemented"
     return cfg

@@ -1,1 +1,1 @@
-"""Local Qwen agents for analog circuit workflow experiments."""
+"""Retained local Qwen interface and service configuration."""

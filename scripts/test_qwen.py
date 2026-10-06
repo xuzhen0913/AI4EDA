@@ -1,7 +1,7 @@
 import json
 from analog_agents.config import load_config, project_path
 from analog_agents.client import LocalClient
-from analog_agents.agents import obj
+from agents.sizing_agent.agent import obj
 
 def main():
     schema = obj({"answer": {"type": "integer"}})

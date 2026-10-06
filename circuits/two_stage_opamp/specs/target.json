@@ -1,0 +1,149 @@
+{
+  "circuit": "two_stage_opamp",
+  "process": "sky130",
+  "corner": "tt",
+  "conditions": {
+    "vdd_v": 1.8,
+    "temperature_c": 27,
+    "input_common_mode_v": 0.9,
+    "load_capacitance_f": 2e-12
+  },
+  "targets": {
+    "dc_gain_db": {
+      "min": 60
+    },
+    "ugb_hz": {
+      "min": 10000000
+    },
+    "phase_margin_deg": {
+      "min": 60
+    },
+    "power_w": {
+      "max": 0.0005
+    }
+  },
+  "optimization": {
+    "max_iterations": 5,
+    "allowed_parameters": [
+      "W_IN",
+      "L_IN",
+      "W_LOAD",
+      "L_LOAD",
+      "W_TAIL",
+      "L_TAIL",
+      "W_STAGE2",
+      "L_STAGE2",
+      "W_STAGE2_LOAD",
+      "L_STAGE2_LOAD",
+      "W_BIAS_N",
+      "L_BIAS_N",
+      "W_BIAS_P",
+      "L_BIAS_P",
+      "IBIAS",
+      "CC"
+    ],
+    "parameter_bounds": {
+      "W_IN": {
+        "min_um": 1.0,
+        "max_um": 100.0
+      },
+      "L_IN": {
+        "min_um": 0.15,
+        "max_um": 2.0
+      },
+      "W_LOAD": {
+        "min_um": 1.0,
+        "max_um": 100.0
+      },
+      "L_LOAD": {
+        "min_um": 0.15,
+        "max_um": 2.0
+      },
+      "W_TAIL": {
+        "min_um": 1.0,
+        "max_um": 100.0
+      },
+      "L_TAIL": {
+        "min_um": 0.15,
+        "max_um": 2.0
+      },
+      "W_STAGE2": {
+        "min_um": 1.0,
+        "max_um": 200.0
+      },
+      "L_STAGE2": {
+        "min_um": 0.15,
+        "max_um": 2.0
+      },
+      "W_STAGE2_LOAD": {
+        "min_um": 1.0,
+        "max_um": 200.0
+      },
+      "L_STAGE2_LOAD": {
+        "min_um": 0.15,
+        "max_um": 2.0
+      },
+      "W_BIAS_N": {
+        "min_um": 1.0,
+        "max_um": 100.0
+      },
+      "L_BIAS_N": {
+        "min_um": 0.15,
+        "max_um": 2.0
+      },
+      "W_BIAS_P": {
+        "min_um": 1.0,
+        "max_um": 100.0
+      },
+      "L_BIAS_P": {
+        "min_um": 0.15,
+        "max_um": 2.0
+      },
+      "IBIAS": {
+        "min_a": 1e-06,
+        "max_a": 0.0001
+      },
+      "CC": {
+        "min_f": 1e-13,
+        "max_f": 1e-11
+      }
+    },
+    "matching_constraints": [
+      {
+        "devices": [
+          "XM1",
+          "XM2"
+        ],
+        "shared_parameters": [
+          "W_IN",
+          "L_IN"
+        ],
+        "description": "Differential input pair must remain matched."
+      },
+      {
+        "devices": [
+          "XM3",
+          "XM4"
+        ],
+        "shared_parameters": [
+          "W_LOAD",
+          "L_LOAD"
+        ],
+        "description": "PMOS current-mirror load must remain matched."
+      }
+    ]
+  },
+  "report": {
+    "generate_pdf": true,
+    "filename": "final_report.pdf",
+    "required_sections": [
+      "optimized_netlist",
+      "circuit_topology",
+      "final_performance",
+      "optimization_iterations",
+      "simulation_count",
+      "optimization_time",
+      "token_usage"
+    ]
+  }
+}
