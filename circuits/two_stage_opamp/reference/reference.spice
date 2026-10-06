@@ -34,7 +34,7 @@
 * Matching is enforced structurally by shared parameters.
 *
 * M1 = M2
-* M3 = M4
+* L_M3 = L_M4; W_M4 = W_M3
 *
 * Qwen must modify these parameters only.
 * ============================================================
@@ -43,27 +43,23 @@
 .param W_IN=10
 .param L_IN=0.5
 
-* PMOS current mirror: M3 = M4
+* PMOS current mirror: L_M3 = L_M4 = L_LOAD; W_M4 = W_M3 = W_LOAD
 .param W_LOAD=10
 .param L_LOAD=0.5
 
 * Tail current source: M5
-.param W_TAIL=10
-.param L_TAIL=1.0
 
 * Second-stage NMOS: M6
 .param W_STAGE2=30
 .param L_STAGE2=0.5
 
 * Second-stage PMOS load: M7
-.param W_STAGE2_LOAD=20
-.param L_STAGE2_LOAD=0.5
 
 * Bias reference devices
-.param W_BIAS_N=10
+.param WBN0=10
 .param L_BIAS_N=1.0
 
-.param W_BIAS_P=10
+.param WBP0=10
 .param L_BIAS_P=1.0
 
 * Reference bias current
@@ -71,6 +67,15 @@
 
 * Miller compensation
 .param CC=1p
+
+* HARD STRUCTURAL MATCHING: ratios must be positive integers.
+* M1/M2: identical W_IN and L_IN.
+* M3/M4: shared L_LOAD and W_LOAD, M3 diode-connected.
+* MBIAS_N/M5: shared L_BIAS_N; W5=N_TAIL*WBN0.
+* MBIAS_P/M7: shared L_BIAS_P; W7=N_STAGE2_LOAD*WBP0.
+* Python rejects fractional N and effective device widths outside target bounds.
+.param N_TAIL=1
+.param N_STAGE2_LOAD=1
 
 
 * ============================================================
@@ -98,7 +103,7 @@ VINN vinn 0 DC {VCM} AC -0.5
 IBIAS_N vdd vbias_n {IBIAS}
 
 XMBIAS_N vbias_n vbias_n 0 0 sky130_fd_pr__nfet_01v8
-+ W={W_BIAS_N} L={L_BIAS_N}
++ W={WBN0} L={L_BIAS_N}
 
 
 * ============================================================
@@ -120,13 +125,13 @@ XM3 n1 n1 vdd vdd sky130_fd_pr__pfet_01v8
 + W={W_LOAD} L={L_LOAD}
 
 XM4 n2 n1 vdd vdd sky130_fd_pr__pfet_01v8
-+ W={W_LOAD} L={L_LOAD}
++ W={N_LOAD*W_LOAD} L={L_LOAD}
 
 
 * Tail current source
 
 XM5 ntail vbias_n 0 0 sky130_fd_pr__nfet_01v8
-+ W={W_TAIL} L={L_TAIL}
++ W={N_TAIL*WBN0} L={L_BIAS_N}
 
 
 * ============================================================
@@ -136,7 +141,7 @@ XM5 ntail vbias_n 0 0 sky130_fd_pr__nfet_01v8
 IBIAS_P vbias_p 0 {IBIAS}
 
 XMBIAS_P vbias_p vbias_p vdd vdd sky130_fd_pr__pfet_01v8
-+ W={W_BIAS_P} L={L_BIAS_P}
++ W={WBP0} L={L_BIAS_P}
 
 
 * ============================================================
@@ -152,7 +157,7 @@ XM6 out n2 0 0 sky130_fd_pr__nfet_01v8
 * PMOS current-source load
 
 XM7 out vbias_p vdd vdd sky130_fd_pr__pfet_01v8
-+ W={W_STAGE2_LOAD} L={L_STAGE2_LOAD}
++ W={N_STAGE2_LOAD*WBP0} L={L_BIAS_P}
 
 
 * ============================================================
@@ -169,7 +174,7 @@ CCOMP n2 out {CC}
 CLOAD_OUT out 0 {CLOAD}
 
 
-* Corrected testbench: same devices, parameters and excitation.
+* DC-first testbench. Runner removes the marked AC block for DC-only checks.
 * Output is inverting relative to VINP-VINN; use -V(out) for loop phase.
 .control
 set noaskquit
@@ -254,6 +259,7 @@ print @m.xmbias_p.msky130_fd_pr__pfet_01v8[vds]
 print @m.xmbias_p.msky130_fd_pr__pfet_01v8[vth]
 print @m.xmbias_p.msky130_fd_pr__pfet_01v8[vdsat]
 echo END_DC_OPERATING_POINT
+* BEGIN_AC_ANALYSIS
 ac dec 100 1 1G
 let gain = db(v(out))
 let loop_phase_deg = 180/PI*cph(-v(out))
@@ -262,6 +268,7 @@ meas ac ugb_hz WHEN gain=0 FALL=1
 meas ac phase_at_ugb FIND loop_phase_deg WHEN gain=0 FALL=1
 let phase_margin_deg = 180+phase_at_ugb
 print phase_margin_deg
+* END_AC_ANALYSIS
 quit
 .endc
 .end

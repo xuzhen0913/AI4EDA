@@ -1,109 +1,113 @@
-# SKY130 fixed-topology Qwen sizing
+# SKY130 两级运放：DC 优先尺寸优化
 
-The project is `/home/xu/Multi-agent` (Linux paths are case-sensitive).
-This version implements the current `prompt.md`: ONE local Qwen sizing agent,
-real SKY130/ngspice, constrained `.param` updates and an English PDF.
-The previous mock multi-agent workflow has been removed. Obsolete manuals and their build scripts have been removed.
+**一行命令：自动选择空闲 GPU → 启动 Qwen → 尺寸优化 → 生成中英文 PDF → 释放本次 GPU 服务。**
 
-## Run
+```bash
+bash /home/xu/Multi-agent/scripts/run_all.sh
+```
+
+[English README](README_EN.md)
+
+## 运行前需要知道
+
+项目使用已有的本地 Qwen3-8B、vLLM、SKY130 和 ngspice，不会重新安装模型或修改 `/home/xu/eda`。
+脚本优先选配置中的 GPU 3；如果忙，则选择另一张空闲 GPU。判定空闲的条件为显存占用不超过 1024 MiB、利用率不超过 5%。没有空闲 GPU 时退出，不杀死其他人的进程。
+此检查不是集群资源预留；共享服务器仍应遵守管理员的调度规则。
+
+本脚本启动的模型服务在正常完成、Python 异常或 Ctrl+C 后会尝试关闭；不会关闭已有的其他服务。
+如果本项目的 Qwen 已经启动，一键脚本会提示退出；可运行 `bash scripts/run_demo.sh` 复用它，或先运行 `bash scripts/stop.sh`。
+进程被系统强制杀死（例如 SIGKILL）时无法保证执行清理。
+
+报告位于：
+
+- 中文：`circuits/two_stage_opamp/results/final_report_zh.pdf`
+- 英文：`circuits/two_stage_opamp/results/final_report.pdf`
+
+达到迭代上限也会生成报告。流程跑完不等于电路达标。DC 没通过时，报告把 AC 指标标为“未仿真”，不会填零或沿用上一轮的结果。
+
+## 写死在网表中的匹配约束
+
+实际参考文件：`circuits/two_stage_opamp/reference/reference.spice`。
+
+| 器件 | W 表达式 | L 表达式 |
+|---|---|---|
+| M1、M2 | `W_IN` | `L_IN` |
+| M3（二极管连接） | `W_LOAD` | `L_LOAD` |
+| M4 | `N_LOAD*W_LOAD` | `L_LOAD` |
+| MBIAS_N（二极管连接） | `WBN0` | `L_BIAS_N` |
+| M5 | `N_TAIL*WBN0` | `L_BIAS_N` |
+| MBIAS_P（二极管连接） | `WBP0` | `L_BIAS_P` |
+| M7 | `N_STAGE2_LOAD*WBP0` | `L_BIAS_P` |
+| M6 | `W_STAGE2` | `L_STAGE2` |
+
+三个 N 必须是正整数，初始值分别为 1、1、2。`N=1` 是合法的 1:1 电流镜。
+只有 Python 校验通过后才写入新的候选电路，不能通过修改单管 W/L 绕过约束。
+无效或旧值不匹配的提案被拒绝并反馈给下一轮；保留当前尺寸，这次决策仍占用迭代额度。
+除基础参数范围外，程序还检查 `N×W` 乘积：M4、M5 的 W 最大 100 µm，M7 最大 200 µm，实际边界以 target.json 为准。
+ngspice 的 `.param` 本身不限制整数类型，所以“共享关系”由网表强制，“整数性和边界”由 Python 强制。
+
+注意：为了让 M7 与 MBIAS_P 的 L 一致，M7 初始 L 从旧参考的 0.5 µm 改为共享的 1.0 µm。因此旧实验性能不能当作新参考的 baseline。
+`reference.original.spice` 仅保留最初用户输入，不作为当前运行入口。
+
+## DC 检查和迭代逻辑
+
+1. 读取 `target.json` 和固定参考网表，校验匹配关系及参数范围。
+2. 只调用一次 DC OP 仿真；执行网表中 `.control` 内的 `op`，移除标记的 AC 分析块。
+3. 检查全部九个 MOS（包括两个偏置参考管）的工作点。必须满足：
+   - 漏源电压方向正确；
+   - `|Id| >= 1 nA`；
+   - NMOS 的 `VGS-|Vth| >= 0`、PMOS 的 `VSG-|Vth| >= 0`；
+   - NMOS 的 `VDS-|VDSAT| >= 0`、PMOS 的 `VSD-|VDSAT| >= 0`。
+4. 任一器件不通过或数据缺失：不给 AC 放行；Qwen 根据完整日志和失败器件信息调整尺寸。
+5. 全部通过才执行完整 OP + AC 仿真，提取增益、UGB、相位裕度及功耗，并进行性能优化。
+6. 每次模型尺寸决策之后，先重新检查 DC；通过才执行完整性能仿真。后续 DC 失败时立即回到 DC 修复。
+7. 全部性能达标则停止，否则到预算上限停止并生成报告。
+
+**DC 修复决策累计最多 5 次，全部决策累计最多 10 次。** 后续返回 DC 修复也占用同一个 5 次额度，不重置。
+DC 第五次修复后如果仍失败，就停止；如果通过，剩余总额度可以用于性能优化。
+基准仿真不算一次模型迭代。一次模型读取日志并给出决定算一次迭代，即使没有改参数。
+一次 DC 调用和一次完整 OP+AC 调用分别计一次仿真，所以仿真次数可能大于迭代次数。
+
+这是本项目的强反型饱和验收规则，阈值可在 `target.json` 的 `dc_acceptance` 中调整。使用模型报告的 `VDSAT`，不拿长沟道近似 `VGS-Vth` 代替。
+来源：[ngspice 官方手册](https://ngspice.sourceforge.io/docs/ngspice-manual.pdf)。模型参数是连续的，边界验收不等于验证全部模拟设计要求。
+
+## 修改哪些文件
+
+| 目的 | 文件 |
+|---|---|
+| 指标、参数边界、整数倍率、DC 阈值和迭代额度 | `circuits/two_stage_opamp/specs/target.json` |
+| 固定电路、共享参数和测量语句 | `circuits/two_stage_opamp/reference/reference.spice` |
+| Qwen 设计规则 | `agents/sizing_agent/prompt.md` |
+| 数值与结构约束检查 | `agents/sizing_agent/agent.py` |
+| DC 判据、真实 ngspice 调用 | `simulator/ngspice_runner.py` |
+| DC／性能阶段切换和计数 | `main.py` |
+| 模型、端口、GPU 首选项、上下文窗口 | `config/settings.json` |
+| GPU 选择与服务生命周期 | `scripts/service.py`、`scripts/run_all.py` |
+| PDF 内容和整体连线图 | `simulator/report_generator.py` |
+
+现有接口是 `http://127.0.0.1:8003/v1`，模型服务名 `qwen3-8b-local`。请求包括 target、参考网表、候选网表、完整最新日志、测量摘要和全部迭代历史。超出上下文窗口会明确中断，不会静默截断日志。
+
+## 文件与依赖位置
+
+- `main.py`：优化入口；`scripts/run_all.sh`：推荐的一键入口。
+- `analog_agents/`：保留的 Qwen 客户端与配置读取模块，当前只有 sizing 一个设计 Agent。
+- `models/Qwen3-8B/`：模型权重；`.runtime/`：本项目缓存与临时文件。
+- `/home/xu/.venv/`：共用 Python 环境；`tools_path.md`：已有 EDA 工具的绝对路径。
+- `working/candidate.spice`：当前候选；`results/`：报告、JSON、完整日志及每次实际执行的网表。
+- `results/runs/`：后续运行前归档的旧报告和摘要；`results/logs/`：不覆盖的编号仿真日志。
+
+## 不使用 GPU 的检查
+
+```bash
+bash /home/xu/Multi-agent/scripts/run_all.sh --baseline-only
+```
+
+这也遵循 DC 放行规则并生成中英文报告，但不调用 Qwen，不证明优化闭环已完成。
 
 ```bash
 cd /home/xu/Multi-agent
-bash scripts/start.sh
-bash scripts/run_demo.sh
-bash scripts/stop.sh
-```
-
-`start.sh` uses the existing Qwen3-8B weights and vLLM installation. It does not
-install or download anything. GPU 3 is configured; startup refuses a busy GPU
-(>1024 MiB used or >5% utilization). It does not kill other users' processes or
-select another GPU automatically. Set `gpu` in `config/settings.json` to an idle
-GPU before startup. An idle check is not a cluster reservation; use the site's
-scheduler on shared machines if available. Stop only this project's managed service.
-
-The existing API is `http://127.0.0.1:8003/v1`, served model `qwen3-8b-local`.
-The same proven OpenAI-compatible client is retained in `analog_agents/client.py`.
-The context limit is now 32768: the required initial full input is already about
-13619 tokens. Input is tokenized before calling Qwen; full logs/history are never
-silently truncated. If later history exceeds the limit, the run records an interruption.
-`max_tokens=1800`, temperature=0.2, structured JSON and thinking-disabled template
-remain explicit local inference settings. All sizing reasoning must come from Qwen.
-
-CPU-only real simulation and report check (no Qwen iteration):
-
-```bash
-bash scripts/run_demo.sh --baseline-only
-```
-
-## Files and workflow
-
-1. `scripts/run_demo.sh` sources `scripts/env.sh` and starts `main.py` with
-   `/home/xu/.venv/bin/python`.
-2. `main.py` reads `circuits/two_stage_opamp/specs/target.json` and
-   `circuits/two_stage_opamp/reference/reference.spice`. It checks allowed parameters
-   and matching, copies the reference into `working/candidate.spice` and snapshots inputs.
-3. `simulator/ngspice_runner.py` reads executable/model locations from `tools_path.md`
-   and executes real ngspice. Each invocation saves the actual netlist, complete merged
-   stdout/stderr, return code, measurements and device/node DC diagnostics in numbered files.
-4. `agents/sizing_agent/agent.py` reads its `prompt.md`, and sends target, reference,
-   candidate, FULL latest log, measurements and history through the retained local client.
-5. Qwen diagnoses simulation validity, then DC bias, then AC/power. Python validates JSON,
-   allowed names, old values, numeric bounds and unchanged topology/matching before applying
-   at most three parameter changes. Invalid proposals interrupt safely; no random fallback.
-6. The updated candidate is simulated, and the loop repeats up to the target's iteration
-   budget (currently 5), or stops when measured targets pass and Qwen confirms validity/DC bias.
-7. `simulator/report_generator.py` reads recorded evidence and builds an English PDF,
-   including actual net-labeled transistor topology, all source/passive connections,
-   full candidate, metrics, history, counts, timing and tokens. An interrupted run also
-   receives a clearly labeled partial report if simulation evidence exists.
-
-A Qwen decision counts as one iteration, even with no changes. Every ngspice invocation
-counts separately. Final candidate results after the last allowed update are retained,
-but no unbudgeted extra Qwen decision is made. A run ending at its iteration limit is
-not reported as a Qwen-confirmed successful experiment.
-
-## Configuration and tools
-
-- `target.json`: performance limits, conditions, allowed sizes/bounds and iteration budget.
-- `reference.spice`: fixed circuit and testbench; `reference.original.spice` preserves
-  the exact user input before testbench corrections. Changing conditions requires matching
-  edits to reference and target; startup validates this consistency.
-- `agents/sizing_agent/prompt.md`: Qwen analysis instructions.
-- `config/settings.json`: existing local model/API/GPU/context/inference settings.
-- `tools_path.md`: existing read-only EDA tool locations; no PDK/tools reinstallation.
-- Model: `models/Qwen3-8B`; caches: `.runtime`; service logs: `logs`.
-- Shared Python: `/home/xu/.venv`; shared Python installation/tools remain under
-  `/home/xu/.runtime`. No changes to `/home/xu/eda`.
-
-## Results
-
-`circuits/two_stage_opamp/results/final_report.pdf`
-
-Adjacent files include `summary.json`, `history.json`, `measurements.json`, `calls.json`,
-`current.log`, input snapshots, and `logs/simulation_NNN.{log,json,spice}`.
-Earlier run-level files are copied into `results/runs/<timestamp>/`; numbered logs are
-never overwritten. Use a single run at a time; a file lock enforces this.
-
-The original testbench used unsupported `.meas op` and added radian phase to 180 degrees.
-The corrected testbench computes DC power from supply current, reports device OP, and
-uses continuous phase in degrees of `-V(out)` (the supplied input-to-output transfer is
-inverting). See the official ngspice manual: https://ngspice.sourceforge.io/docs/ngspice-manual.pdf
-Only testbench instrumentation was changed; circuit connectivity and initial sizing remain.
-
-The supplied target defines two explicit matched pairs. Tail and bias NMOS lengths are
-separate allowed parameters (`L_TAIL`, `L_BIAS_N`); this implementation preserves exactly
-that supplied parameterization rather than inventing a new shared bias parameter.
-
-## Validation
-
-```bash
 source scripts/env.sh
-"$PROJECT_PYTHON" -m pytest -q
+"$PROJECT_PYTHON" -m pytest -q -p no:cacheprovider
 ```
 
-No mock circuit simulator is included. Unit tests exercise constraint/parser behavior;
-they are not evidence of Qwen inference or circuit convergence.
-
-Latest real validation: five local Qwen decisions, six SKY130/ngspice simulations,
-normal termination at the five-iteration limit, and an English PDF. Circuit targets
-were not all met. See `docs/SIZING_VALIDATION.md` for measured results and limitations.
+单元测试中的固定输入仅测试参数校验、阶段切换及计数，不代表实际电路仿真或模型推理。

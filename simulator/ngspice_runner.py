@@ -1,4 +1,5 @@
 """Real ngspice execution, complete logs and conservative measurement validation."""
+import hashlib
 import json
 import math
 import re
@@ -24,7 +25,33 @@ def tool_paths():
         raise FileNotFoundError('ngspice or SKY130 library in tools_path.md is missing')
     return executable, library
 
-def parse_log(text, returncode, target):
+def dc_check(diagnostics, target):
+    policy=target['dc_acceptance']; devices={}
+    def voltage(node): return 0.0 if node=='0' else diagnostics.get('v('+node+')')
+    for name, spec in policy['devices'].items():
+        prefix='@m.'+name.lower()+'.msky130_fd_pr__'+spec['kind']+'_01v8'
+        op={key:diagnostics.get(prefix+'['+key+']') for key in ('id','vgs','vds','vth','vdsat')}
+        nodes=[voltage(spec[k]) for k in ('drain','gate','source')]
+        if any(v is None or not math.isfinite(v) for v in list(op.values())+nodes):
+            devices[name]={'passed':False,'reason':'Missing or nonfinite DC diagnostics'}
+            continue
+        drain,gate,source=nodes
+        sign=1 if spec['kind']=='nfet' else -1
+        vds=sign*(drain-source);vgs=sign*(gate-source)
+        overdrive=vgs-abs(op['vth']);margin=vds-abs(op['vdsat'])
+        checks={'conducting':abs(op['id'])>=policy['minimum_drain_current_a'],
+            'overdrive':overdrive>=policy['minimum_overdrive_v'],
+            'saturation':margin>=policy['minimum_saturation_margin_v'],
+            'forward_bias':vds>0}
+        devices[name]={'passed':all(checks.values()),'checks':checks,'id_a':abs(op['id']),
+            'vgs_or_vsg_v':vgs,'vds_or_vsd_v':vds,'vth_magnitude_v':abs(op['vth']),
+            'vdsat_magnitude_v':abs(op['vdsat']),'overdrive_v':overdrive,'saturation_margin_v':margin}
+    return {'passed':bool(devices) and all(v['passed'] for v in devices.values()),
+            'failed_devices':[k for k,v in devices.items() if not v['passed']], 'devices':devices,
+            'criterion':'Forward orientation, |Id| >= minimum, VGS/VSG-|Vth| >= minimum, VDS/VSD-|VDSAT| >= minimum'}
+
+
+def parse_log(text, returncode, target, mode='full'):
     values = {m[0].lower(): float(m[1]) for m in re.findall(
         rf'^\s*([^\s=]+)\s*=\s*({NUMBER})(?:\s|$)', text, re.M)}
     metrics = {key: values.get(key) for key in target['targets']}
@@ -32,12 +59,25 @@ def parse_log(text, returncode, target):
     issues = [line for line in text.splitlines() if re.search(
         r'error|failed|singular matrix|timestep too small|\bnan\b|\binf\b',line,re.I)]
     warnings = [l for l in text.splitlines() if 'warning' in l.lower()]
-    valid = returncode == 0 and not issues and all(v is not None and math.isfinite(v) for v in metrics.values())
-    checks = {k: valid and all(v >= limit if op=='min' else v <= limit
-        for op,limit in target['targets'][k].items()) for k,v in metrics.items()}
-    return {'metrics':metrics,'dc_operating_point':diagnostics,'simulation_valid':valid,
+    required = metrics.values() if mode=='full' else [values.get('power_w')]+list(diagnostics.values())
+    valid = returncode == 0 and not issues and bool(diagnostics) and all(v is not None and math.isfinite(v) for v in required)
+    dc=dc_check(diagnostics,target)
+    dc['passed']=valid and dc['passed']
+    checks = {k: (None if v is None else all(v >= limit if op=='min' else v <= limit
+        for op,limit in target['targets'][k].items())) for k,v in metrics.items()}
+    return {'analysis_mode':mode,'metrics':metrics,'dc_operating_point':diagnostics,'simulation_valid':valid,
+            'dc_acceptance':dc,'dc_passed':dc['passed'],
             'warnings':warnings,'errors':issues,'return_code':returncode,'checks':checks,
-            'all_targets_passed':valid and all(checks.values())}
+            'all_targets_passed':mode=='full' and valid and dc['passed'] and all(checks.values())}
+
+
+def simulation_source(source, mode):
+    if mode not in ('dc','full'):raise ValueError('Unknown analysis mode')
+    if mode=='dc':
+        pattern=r'\* BEGIN_AC_ANALYSIS.*?\* END_AC_ANALYSIS'
+        source,count=re.subn(pattern,'* AC skipped: DC-only saturation check.',source,flags=re.S)
+        if count!=1:raise ValueError('Exactly one marked AC block is required')
+    return source
 
 class NgspiceRunner:
     def __init__(self, results, target):
@@ -45,15 +85,20 @@ class NgspiceRunner:
         (self.results/'logs').mkdir(parents=True,exist_ok=True)
         self.executable, self.library = tool_paths()
         self.count = 0
+        self.dc_approved_hash = None
         self.next_number = max([int(p.stem.split('_')[-1]) for p in
             (self.results/'logs').glob('simulation_*.log')]+[0])+1
 
-    def run(self, netlist):
+    def run(self, netlist, mode='dc'):
+        original=Path(netlist).read_text()
+        digest=hashlib.sha256(original.encode()).hexdigest()
+        if mode=='full' and self.dc_approved_hash!=digest:
+            raise ValueError('Full simulation requires a passing DC check for this exact candidate')
+        source=simulation_source(original,mode)
         number = self.next_number
         self.next_number += 1
         self.count += 1
         prefix = self.results/'logs'/f'simulation_{number:03d}'
-        source = Path(netlist).read_text()
         if str(self.library) not in source:
             raise ValueError('Netlist must use the SKY130 library specified in tools_path.md')
         prefix.with_suffix('.spice').write_text(source)
@@ -71,8 +116,9 @@ class NgspiceRunner:
             log.write(f'\nRETURN_CODE: {code}\n')
         text = prefix.with_suffix('.log').read_text()
         (self.results/'current.log').write_text(text)
-        record = parse_log(text, code, self.target)
-        record.update(simulation_number=number, seconds=time.perf_counter()-started,
+        record = parse_log(text, code, self.target, mode)
+        if mode=='dc':self.dc_approved_hash=digest if record['dc_passed'] else None
+        record.update(candidate_sha256=digest, simulation_number=number, seconds=time.perf_counter()-started,
                       log=str(prefix.with_suffix('.log')))
         save(prefix.with_suffix('.json'), record)
         save(self.results/'measurements.json', record)

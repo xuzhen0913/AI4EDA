@@ -41,8 +41,20 @@ def stop():
     STATE.unlink()
     print("Managed Qwen service stopped.")
 
-def start():
+def choose_idle_gpu(preferred):
+    rows=subprocess.check_output(['nvidia-smi','--query-gpu=index,memory.used,utilization.gpu',
+        '--format=csv,noheader,nounits'],text=True).strip().splitlines()
+    idle=[]
+    for row in rows:
+        index,used,util=[int(v.strip()) for v in row.split(',')]
+        if used<=1024 and util<=5:idle.append(index)
+    if not idle:raise RuntimeError('No idle GPU. No existing process will be stopped.')
+    return preferred if preferred in idle else idle[0]
+
+
+def start(auto_gpu=False):
     c = load_config()
+    if auto_gpu:c['gpu']=choose_idle_gpu(c['gpu'])
     if STATE.exists() and owned(json.loads(STATE.read_text())):
         raise RuntimeError("Managed service already running; use stop.sh first")
     with socket.socket() as sock:

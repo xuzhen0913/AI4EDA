@@ -55,6 +55,25 @@ def validate_candidate(reference, candidate, target):
             line=re.search(r'^'+re.escape(device)+r'\s+.*$',logical,re.M|re.I)
             if not line or any('{'+p+'}' not in line[0] for p in constraint['shared_parameters']):
                 raise ValueError('Matching constraint broken')
+    for name in target['optimization'].get('integer_parameters', []):
+        if not number(params[name]).is_integer():
+            raise ValueError(f'{name} must be a positive integer')
+    for device, dimensions in target['optimization'].get('device_dimensions', {}).items():
+        line=re.search(r'^'+re.escape(device)+r'\s+.*$',logical,re.M|re.I)
+        if not line: raise ValueError('Missing device: '+device)
+        actual={k.upper():v for k,v in re.findall(r'([WL])=\{([^}]+)\}',line[0],re.I)}
+        if actual!=dimensions: raise ValueError('Hard matching expression changed: '+device)
+        bounds=target['optimization']['device_bounds'][device]
+        for dimension, expression in dimensions.items():
+            # Restricted product of named scalar parameters; never evaluate model text as code.
+            value=math.prod(number(params[k]) for k in expression.split('*'))
+            if not bounds['min_'+dimension.lower()+'_um']<=value<=bounds['max_'+dimension.lower()+'_um']:
+                raise ValueError('Effective device dimension out of bounds: '+device+' '+dimension)
+    for mirror in target['optimization'].get('mirror_constraints', []):
+        line=re.search(r'^'+mirror['reference']+r'\s+.*$',logical,re.M|re.I)[0].split()
+        other=re.search(r'^'+mirror['output']+r'\s+.*$',logical,re.M|re.I)[0].split()
+        if line[1]!=line[2] or line[2:5]!=other[2:5]:
+            raise ValueError('Invalid diode-connected mirror: '+mirror['reference'])
     return params
 
 def apply_changes(reference, candidate, target, changes):
@@ -80,4 +99,6 @@ class SizingAgent:
     def run(self, target, reference, candidate, full_log, measurements, history):
         return self.client.ask(self.prompt,dict(target=target,reference_spice=reference,
             candidate_spice=candidate,full_ngspice_log=full_log,measurements=measurements,
+            current_parameters=parameters(candidate),
+            last_rejection=history[-1].get('validation_error') if history else None,
             history=history),SCHEMA,agent_name='sizing')

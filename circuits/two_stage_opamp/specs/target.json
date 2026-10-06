@@ -23,24 +23,23 @@
     }
   },
   "optimization": {
-    "max_iterations": 5,
+    "max_iterations": 10,
     "allowed_parameters": [
       "W_IN",
       "L_IN",
       "W_LOAD",
       "L_LOAD",
-      "W_TAIL",
-      "L_TAIL",
       "W_STAGE2",
       "L_STAGE2",
-      "W_STAGE2_LOAD",
-      "L_STAGE2_LOAD",
-      "W_BIAS_N",
+      "WBN0",
       "L_BIAS_N",
-      "W_BIAS_P",
+      "WBP0",
       "L_BIAS_P",
       "IBIAS",
-      "CC"
+      "CC",
+      "N_LOAD",
+      "N_TAIL",
+      "N_STAGE2_LOAD"
     ],
     "parameter_bounds": {
       "W_IN": {
@@ -59,14 +58,6 @@
         "min_um": 0.15,
         "max_um": 2.0
       },
-      "W_TAIL": {
-        "min_um": 1.0,
-        "max_um": 100.0
-      },
-      "L_TAIL": {
-        "min_um": 0.15,
-        "max_um": 2.0
-      },
       "W_STAGE2": {
         "min_um": 1.0,
         "max_um": 200.0
@@ -75,25 +66,9 @@
         "min_um": 0.15,
         "max_um": 2.0
       },
-      "W_STAGE2_LOAD": {
-        "min_um": 1.0,
-        "max_um": 200.0
-      },
-      "L_STAGE2_LOAD": {
-        "min_um": 0.15,
-        "max_um": 2.0
-      },
-      "W_BIAS_N": {
-        "min_um": 1.0,
-        "max_um": 100.0
-      },
       "L_BIAS_N": {
         "min_um": 0.15,
         "max_um": 2.0
-      },
-      "W_BIAS_P": {
-        "min_um": 1.0,
-        "max_um": 100.0
       },
       "L_BIAS_P": {
         "min_um": 0.15,
@@ -106,6 +81,26 @@
       "CC": {
         "min_f": 1e-13,
         "max_f": 1e-11
+      },
+      "WBN0": {
+        "min_um": 1.0,
+        "max_um": 100.0
+      },
+      "WBP0": {
+        "min_um": 1.0,
+        "max_um": 100.0
+      },
+      "N_LOAD": {
+        "min": 1,
+        "max": 20
+      },
+      "N_TAIL": {
+        "min": 1,
+        "max": 20
+      },
+      "N_STAGE2_LOAD": {
+        "min": 1,
+        "max": 20
       }
     },
     "matching_constraints": [
@@ -119,17 +114,123 @@
           "L_IN"
         ],
         "description": "Differential input pair must remain matched."
+      }
+    ],
+    "max_dc_iterations": 5,
+    "integer_parameters": [
+      "N_LOAD",
+      "N_TAIL",
+      "N_STAGE2_LOAD"
+    ],
+    "device_dimensions": {
+      "XM1": {
+        "W": "W_IN",
+        "L": "L_IN"
+      },
+      "XM2": {
+        "W": "W_IN",
+        "L": "L_IN"
+      },
+      "XM3": {
+        "W": "W_LOAD",
+        "L": "L_LOAD"
+      },
+      "XM4": {
+        "W": "N_LOAD*W_LOAD",
+        "L": "L_LOAD"
+      },
+      "XMBIAS_N": {
+        "W": "WBN0",
+        "L": "L_BIAS_N"
+      },
+      "XM5": {
+        "W": "N_TAIL*WBN0",
+        "L": "L_BIAS_N"
+      },
+      "XMBIAS_P": {
+        "W": "WBP0",
+        "L": "L_BIAS_P"
+      },
+      "XM7": {
+        "W": "N_STAGE2_LOAD*WBP0",
+        "L": "L_BIAS_P"
+      },
+      "XM6": {
+        "W": "W_STAGE2",
+        "L": "L_STAGE2"
+      }
+    },
+    "device_bounds": {
+      "XM1": {
+        "min_w_um": 1,
+        "max_w_um": 100,
+        "min_l_um": 0.15,
+        "max_l_um": 2
+      },
+      "XM2": {
+        "min_w_um": 1,
+        "max_w_um": 100,
+        "min_l_um": 0.15,
+        "max_l_um": 2
+      },
+      "XM3": {
+        "min_w_um": 1,
+        "max_w_um": 100,
+        "min_l_um": 0.15,
+        "max_l_um": 2
+      },
+      "XM4": {
+        "min_w_um": 1,
+        "max_w_um": 100,
+        "min_l_um": 0.15,
+        "max_l_um": 2
+      },
+      "XMBIAS_N": {
+        "min_w_um": 1,
+        "max_w_um": 100,
+        "min_l_um": 0.15,
+        "max_l_um": 2
+      },
+      "XM5": {
+        "min_w_um": 1,
+        "max_w_um": 100,
+        "min_l_um": 0.15,
+        "max_l_um": 2
+      },
+      "XMBIAS_P": {
+        "min_w_um": 1,
+        "max_w_um": 100,
+        "min_l_um": 0.15,
+        "max_l_um": 2
+      },
+      "XM7": {
+        "min_w_um": 1,
+        "max_w_um": 200,
+        "min_l_um": 0.15,
+        "max_l_um": 2
+      },
+      "XM6": {
+        "min_w_um": 1,
+        "max_w_um": 200,
+        "min_l_um": 0.15,
+        "max_l_um": 2
+      }
+    },
+    "mirror_constraints": [
+      {
+        "reference": "XM3",
+        "output": "XM4",
+        "ratio": "N_LOAD"
       },
       {
-        "devices": [
-          "XM3",
-          "XM4"
-        ],
-        "shared_parameters": [
-          "W_LOAD",
-          "L_LOAD"
-        ],
-        "description": "PMOS current-mirror load must remain matched."
+        "reference": "XMBIAS_N",
+        "output": "XM5",
+        "ratio": "N_TAIL"
+      },
+      {
+        "reference": "XMBIAS_P",
+        "output": "XM7",
+        "ratio": "N_STAGE2_LOAD"
       }
     ]
   },
@@ -145,5 +246,66 @@
       "optimization_time",
       "token_usage"
     ]
+  },
+  "dc_acceptance": {
+    "minimum_drain_current_a": 1e-09,
+    "minimum_overdrive_v": 0.0,
+    "minimum_saturation_margin_v": 0.0,
+    "devices": {
+      "XM1": {
+        "kind": "nfet",
+        "drain": "n1",
+        "gate": "vinp",
+        "source": "ntail"
+      },
+      "XM2": {
+        "kind": "nfet",
+        "drain": "n2",
+        "gate": "vinn",
+        "source": "ntail"
+      },
+      "XM3": {
+        "kind": "pfet",
+        "drain": "n1",
+        "gate": "n1",
+        "source": "vdd"
+      },
+      "XM4": {
+        "kind": "pfet",
+        "drain": "n2",
+        "gate": "n1",
+        "source": "vdd"
+      },
+      "XMBIAS_N": {
+        "kind": "nfet",
+        "drain": "vbias_n",
+        "gate": "vbias_n",
+        "source": "0"
+      },
+      "XM5": {
+        "kind": "nfet",
+        "drain": "ntail",
+        "gate": "vbias_n",
+        "source": "0"
+      },
+      "XMBIAS_P": {
+        "kind": "pfet",
+        "drain": "vbias_p",
+        "gate": "vbias_p",
+        "source": "vdd"
+      },
+      "XM7": {
+        "kind": "pfet",
+        "drain": "out",
+        "gate": "vbias_p",
+        "source": "vdd"
+      },
+      "XM6": {
+        "kind": "nfet",
+        "drain": "out",
+        "gate": "n2",
+        "source": "0"
+      }
+    }
   }
 }

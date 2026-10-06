@@ -1,35 +1,55 @@
-# Five-iteration validation — 2026-10-06
+# DC-first validation — 2026-10-06
 
-The real local Qwen service became available on idle GPU 3. Astra fallback was not used.
-The existing Qwen3-8B/vLLM service successfully started with a 32768-token context.
+Implemented shared input W/L, shared mirror L and positive-integer output/reference width ratios.
+Python validates both base parameters and effective N*W sizes. Removed independent mirror dimensions.
 
-- Workflow completed normally at the configured maximum of 5 decisions.
-- 5 real Qwen requests succeeded with complete server token usage.
-- 6 real SKY130/ngspice simulations succeeded: baseline plus five changed candidates.
-- All candidate sizes passed bounds, matching, and fixed-topology validation.
-- 11 automated tests pass. English PDF was generated from recorded results.
-- Runtime: 171.097 seconds, excluding model startup and PDF rendering.
-- Prompt tokens: 78374; completion: 2064; total: 80438.
+## Automated checks
 
-## Final circuit results
+26 tests pass, including integer rejection, product bounds, missing/cutoff/PMOS DC checks,
+DC-before-AC transitions, DC re-entry, cumulative five-DC and ten-total decision budgets,
+invalid proposal feedback, idle GPU selection and owned-service cleanup. Python and shell syntax pass.
+Transition fixtures test policy only; they do not claim circuit performance or Qwen reasoning.
+
+## Actual one-command run
+
+Executed `bash /home/xu/Multi-agent/scripts/run_all.sh` against the existing local Qwen3-8B
+on idle GPU 3, with real SKY130/ngspice. Startup and automatic shutdown succeeded.
 
 {
-  "dc_gain_db": 14.7299,
-  "ugb_hz": 8415590.0,
-  "phase_margin_deg": 92.30415,
-  "power_w": 0.00045907167302
+  "status": "dc_iteration_limit",
+  "error": null,
+  "iteration_count": 5,
+  "dc_iteration_count": 5,
+  "performance_iteration_count": 0,
+  "simulation_count": 6,
+  "design_backend": "local_qwen",
+  "model": "qwen3-8b-local",
+  "workflow_completed": true,
+  "max_iterations": 10,
+  "max_dc_iterations": 5,
+  "optimization_start_time": "2026-10-06T13:13:58.846024+00:00",
+  "optimization_end_time": "2026-10-06T13:16:53.827476+00:00",
+  "total_optimization_time_seconds": 174.98146464582533,
+  "final_simulation_number": 18,
+  "tokens": {
+    "prompt_tokens": 95821,
+    "completion_tokens": 1935,
+    "total_tokens": 97756
+  },
+  "token_usage_complete": true,
+  "qwen_call_count": 5
 }
 
-Final OUT DC: 1.7959326574 V.
-Workflow success does not imply circuit success: gain is below 60 dB and UGB is below 10 MHz.
-The circuit success rate for this single experiment is 0/1; this is not a benchmark.
+Six actual DC-only simulations ran: baseline plus five decisions. M6 remained outside the
+configured saturation acceptance region, so AC was never executed. All AC values are null,
+not zero and not copied from older experiments. The run terminated at the five-DC limit.
+Both English and Chinese PDFs were generated, and the managed service state was removed.
+The performance-stage path is covered by transition tests; it was not reached by this real run.
 
-Qwen repeatedly increased W_IN, W_STAGE2_LOAD and IBIAS. Gain initially improved
-from 38.9381 to 43.5668 dB, then degraded. Its recorded reasoning is not independently
-validated circuit theory: it incorrectly treats the baseline bias as healthy and
-asserts that increasing PMOS load width necessarily increases output resistance.
-These limitations remain visible in history and the PDF; no substitute sizing decisions
-were injected, and the initial reference was not changed.
+One earlier validation exposed a stale old_value proposal. Rejected proposals now preserve the
+candidate, record validation_error, consume the decision budget and feed the rejection back.
+The final real run also exercised that rejection path. The model did not achieve a valid DC design;
+this does not imply the original Qwen's circuit reasoning is reliable. No replacement sizing was injected.
 
-Evidence: circuits/two_stage_opamp/results/final_report.pdf and adjacent JSON/log files.
-Obsolete documentation, earlier experiment outputs and temporary test artifacts have been removed. Qwen runtime files and models remain available.
+Results: circuits/two_stage_opamp/results/final_report.pdf and final_report_zh.pdf.
+The last simulation's per-device saturation margins are in measurements.json.
