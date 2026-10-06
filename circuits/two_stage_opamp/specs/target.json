@@ -37,7 +37,6 @@
       "L_BIAS_P",
       "IBIAS",
       "CC",
-      "N_LOAD",
       "N_TAIL",
       "N_STAGE2_LOAD"
     ],
@@ -90,10 +89,6 @@
         "min_um": 1.0,
         "max_um": 100.0
       },
-      "N_LOAD": {
-        "min": 1,
-        "max": 20
-      },
       "N_TAIL": {
         "min": 1,
         "max": 20
@@ -114,11 +109,21 @@
           "L_IN"
         ],
         "description": "Differential input pair must remain matched."
+      },
+      {
+        "devices": [
+          "XM3",
+          "XM4"
+        ],
+        "shared_parameters": [
+          "W_LOAD",
+          "L_LOAD"
+        ],
+        "description": "PMOS mirror M3/M4 must have identical W and L (fixed 1:1)."
       }
     ],
     "max_dc_iterations": 5,
     "integer_parameters": [
-      "N_LOAD",
       "N_TAIL",
       "N_STAGE2_LOAD"
     ],
@@ -136,7 +141,7 @@
         "L": "L_LOAD"
       },
       "XM4": {
-        "W": "N_LOAD*W_LOAD",
+        "W": "W_LOAD",
         "L": "L_LOAD"
       },
       "XMBIAS_N": {
@@ -220,7 +225,7 @@
       {
         "reference": "XM3",
         "output": "XM4",
-        "ratio": "N_LOAD"
+        "fixed_ratio": 1
       },
       {
         "reference": "XMBIAS_N",

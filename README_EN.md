@@ -36,19 +36,21 @@ Reference: `circuits/two_stage_opamp/reference/reference.spice`.
 |---|---|---|
 | M1 and M2 | W_IN | L_IN |
 | M3 (diode reference) | W_LOAD | L_LOAD |
-| M4 | N_LOAD*W_LOAD | L_LOAD |
+| M4 | W_LOAD | L_LOAD |
 | MBIAS_N (diode reference) | WBN0 | L_BIAS_N |
 | M5 | N_TAIL*WBN0 | L_BIAS_N |
 | MBIAS_P (diode reference) | WBP0 | L_BIAS_P |
 | M7 | N_STAGE2_LOAD*WBP0 | L_BIAS_P |
 | M6 | W_STAGE2 | L_STAGE2 |
 
-All N parameters must be positive integers; initial values are 1, 1 and 2. Unity is valid.
+M3/M4 share identical W and L, with a fixed 1:1 ratio and no tunable multiplier.
+Only N_TAIL and N_STAGE2_LOAD remain; both must be positive integers and both are
+currently 1 in the reference netlist.
 Netlist expressions enforce sharing, while Python enforces integer values and bounds.
 Invalid proposals, including stale old_value fields, are recorded and rejected; dimensions
 remain unchanged and the rejection is supplied to the next decision. They still consume budget.
-Effective product widths are checked too: current maxima are 100 um for M4/M5 and 200 um
-for M7. See target.json for all limits. Qwen cannot modify individual device dimensions.
+Effective product widths for M5/M7 are checked too. Current width maxima are
+100 um for M3/M4/M5 and 200 um for M7. See target.json for all limits. Qwen cannot modify individual device dimensions.
 
 M7's initial length changed from 0.5 um to the shared PMOS bias length of 1.0 um. Historical
 results are not the new baseline. `reference.original.spice` preserves the original input;

@@ -125,7 +125,7 @@ XM3 n1 n1 vdd vdd sky130_fd_pr__pfet_01v8
 + W={W_LOAD} L={L_LOAD}
 
 XM4 n2 n1 vdd vdd sky130_fd_pr__pfet_01v8
-+ W={N_LOAD*W_LOAD} L={L_LOAD}
++ W={W_LOAD} L={L_LOAD}
 
 
 * Tail current source

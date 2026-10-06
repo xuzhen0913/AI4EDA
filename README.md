@@ -33,17 +33,18 @@ bash /home/xu/Multi-agent/scripts/run_all.sh
 |---|---|---|
 | M1、M2 | `W_IN` | `L_IN` |
 | M3（二极管连接） | `W_LOAD` | `L_LOAD` |
-| M4 | `N_LOAD*W_LOAD` | `L_LOAD` |
+| M4 | `W_LOAD` | `L_LOAD` |
 | MBIAS_N（二极管连接） | `WBN0` | `L_BIAS_N` |
 | M5 | `N_TAIL*WBN0` | `L_BIAS_N` |
 | MBIAS_P（二极管连接） | `WBP0` | `L_BIAS_P` |
 | M7 | `N_STAGE2_LOAD*WBP0` | `L_BIAS_P` |
 | M6 | `W_STAGE2` | `L_STAGE2` |
 
-三个 N 必须是正整数，初始值分别为 1、1、2。`N=1` 是合法的 1:1 电流镜。
+M3/M4 的 W 和 L 完全一致，固定为 1:1，不设置可调倍率。
+只有 `N_TAIL` 和 `N_STAGE2_LOAD` 两个倍率参数，必须是正整数；当前参考网表中均为 1。
 只有 Python 校验通过后才写入新的候选电路，不能通过修改单管 W/L 绕过约束。
 无效或旧值不匹配的提案被拒绝并反馈给下一轮；保留当前尺寸，这次决策仍占用迭代额度。
-除基础参数范围外，程序还检查 `N×W` 乘积：M4、M5 的 W 最大 100 µm，M7 最大 200 µm，实际边界以 target.json 为准。
+除基础参数范围外，程序还检查 M5、M7 的 `N×W` 乘积。M3/M4 的共享 W 最大 100 µm，M5 最大 100 µm，M7 最大 200 µm，实际边界以 target.json 为准。
 ngspice 的 `.param` 本身不限制整数类型，所以“共享关系”由网表强制，“整数性和边界”由 Python 强制。
 
 注意：为了让 M7 与 MBIAS_P 的 L 一致，M7 初始 L 从旧参考的 0.5 µm 改为共享的 1.0 µm。因此旧实验性能不能当作新参考的 baseline。

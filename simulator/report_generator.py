@@ -164,7 +164,7 @@ def generate(results, language='en'):
         p(tr('Failed devices: ','未通过器件：')+', '.join(dc['failed_devices']))
     initial=parameters(reference);final=parameters(net)
     table([[tr('Parameter','参数'),tr('Initial','初始'),tr('Final','最终')]]+[[k,initial[k],final[k]] for k in target['optimization']['allowed_parameters']],[240,120,120])
-    p(tr('W/L: micrometers; IBIAS: amperes; CC: farads. N_LOAD, N_TAIL and N_STAGE2_LOAD are dimensionless positive integers.','W/L 单位为微米，IBIAS 为安培，CC 为法拉。N_LOAD、N_TAIL、N_STAGE2_LOAD 是无量纲正整数。'))
+    p(tr('W/L: micrometers; IBIAS: amperes; CC: farads. M3/M4 have identical W/L. N_TAIL and N_STAGE2_LOAD are dimensionless positive integers.','W/L 单位为微米，IBIAS 为安培，CC 为法拉。M3/M4 的 W/L 完全一致；N_TAIL、N_STAGE2_LOAD 是无量纲正整数。'))
     story.append(PageBreak());p(tr('Iteration history','迭代历史'),title)
     if not history:p(tr('No sizing decision completed.','没有完成尺寸决策。'))
     for row in history:

@@ -27,10 +27,12 @@ repairs them. Do not optimize gain, UGB or CC while the DC gate is closed.
 Full AC/power analysis is executed only after all nine devices pass the Python gate.
 Every changed candidate undergoes a fresh DC check first. A later DC failure returns to
 DC repair. There are at most 5 DC-repair decisions TOTAL, within at most 10 decisions TOTAL.
-All three current mirrors have shared channel length and structurally locked integer
-width ratios. M3 is the diode reference for M4; MBIAS_N for M5; MBIAS_P for M7.
-N_LOAD, N_TAIL, N_STAGE2_LOAD must be positive integers. WBN0 and WBP0 are reference
-widths; output widths are N*reference width. Check EFFECTIVE widths against device_bounds.
+M3 and M4 are a fixed 1:1 mirror: both use W_LOAD and L_LOAD and must remain
+identical in W and L. Their ratio is not an optimizable parameter.
+The other two mirrors share channel length and use positive-integer width ratios:
+MBIAS_N is the diode reference for M5; MBIAS_P for M7.
+N_TAIL and N_STAGE2_LOAD must be positive integers. WBN0 and WBP0 are reference
+widths; their output widths are N*reference width. Check EFFECTIVE widths against device_bounds.
 Do not propose removed independent parameters W_TAIL, L_TAIL, W_STAGE2_LOAD,
 L_STAGE2_LOAD, W_BIAS_N, or W_BIAS_P. Increasing width does not inherently increase ro.
 Keep all structured reasoning in English; reports can present Chinese headings and the original model reasoning.
