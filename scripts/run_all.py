@@ -2,6 +2,7 @@
 import argparse
 import fcntl
 import json
+import os
 import subprocess
 import sys
 from analog_agents.config import ROOT, project_path
@@ -18,6 +19,10 @@ def main():
     validate_candidate(ref,ref,json.loads((base/'specs/target.json').read_text()))
     command=[sys.executable,str(ROOT/'main.py')]
     if args.baseline_only:return subprocess.call(command+['--baseline-only'],cwd=ROOT)
+    backend=os.environ.get('SIZING_BACKEND')
+    if backend not in ('qwen','claude'):
+        raise SystemExit("SIZING_BACKEND must be set to 'qwen' or 'claude', e.g. SIZING_BACKEND=claude bash scripts/run_all.sh")
+    if backend=='claude':return subprocess.call(command,cwd=ROOT)  # no local GPU service needed
     project_path('logs').mkdir(exist_ok=True)
     # Hold across startup, optimization and cleanup. Other managed launches cannot race us.
     with project_path('logs/service.lock').open('a') as lock:

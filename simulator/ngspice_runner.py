@@ -29,7 +29,7 @@ def dc_check(diagnostics, target):
     policy=target['dc_acceptance']; devices={}
     def voltage(node): return 0.0 if node=='0' else diagnostics.get('v('+node+')')
     for name, spec in policy['devices'].items():
-        prefix='@m.'+name.lower()+'.msky130_fd_pr__'+spec['kind']+'_01v8'
+        prefix=spec['diagnostic_prefix'].lower()
         op={key:diagnostics.get(prefix+'['+key+']') for key in ('id','vgs','vds','vth','vdsat')}
         nodes=[voltage(spec[k]) for k in ('drain','gate','source')]
         if any(v is None or not math.isfinite(v) for v in list(op.values())+nodes):

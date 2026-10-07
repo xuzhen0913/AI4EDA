@@ -128,7 +128,7 @@ def test_fifth_dc_repair_can_continue_to_total_limit(tmp_path):
 def test_one_command_cleans_partial_owned_startup(tmp_path,monkeypatch):
     from scripts import run_all
     state=tmp_path/'service.json';actions=[]
-    monkeypatch.setattr(run_all.sys,'argv',['run_all.py'])
+    monkeypatch.setattr(run_all.sys,'argv',['run_all.py']);monkeypatch.setenv('SIZING_BACKEND','qwen')
     monkeypatch.setattr(run_all,'project_path',lambda p:tmp_path/p)
     monkeypatch.setattr(service,'STATE',state)
     def start(**kwargs):
@@ -142,7 +142,7 @@ def test_one_command_cleans_partial_owned_startup(tmp_path,monkeypatch):
 def test_one_command_does_not_stop_preexisting_service(tmp_path,monkeypatch):
     from scripts import run_all
     state=tmp_path/'service.json';state.write_text('{"pid":123}');actions=[]
-    monkeypatch.setattr(run_all.sys,'argv',['run_all.py'])
+    monkeypatch.setattr(run_all.sys,'argv',['run_all.py']);monkeypatch.setenv('SIZING_BACKEND','qwen')
     monkeypatch.setattr(run_all,'project_path',lambda p:tmp_path/p)
     monkeypatch.setattr(service,'STATE',state)
     monkeypatch.setattr(service,'owned',lambda s:True)

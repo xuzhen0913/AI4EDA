@@ -57,7 +57,7 @@
       },
       "W_STAGE2": {
         "min_um": 1.0,
-        "max_um": 200.0
+        "max_um": 100
       },
       "L_STAGE2": {
         "min_um": 0.15,
@@ -190,13 +190,13 @@
       },
       "XM7": {
         "min_w_um": 1,
-        "max_w_um": 200,
+        "max_w_um": 100,
         "min_l_um": 0.15,
         "max_l_um": 2
       },
       "XM6": {
         "min_w_um": 1,
-        "max_w_um": 200,
+        "max_w_um": 100,
         "min_l_um": 0.15,
         "max_l_um": 2
       }
@@ -242,56 +242,72 @@
         "drain": "vbias_n",
         "gate": "vbias_n",
         "source": "0",
-        "body": "0"
+        "body": "0",
+        "model": "sky130_fd_pr__nfet_01v8",
+        "diagnostic_prefix": "@m.xmbias_n.msky130_fd_pr__nfet_01v8"
       },
       "XM1": {
         "kind": "nfet",
         "drain": "n1",
         "gate": "vinp",
         "source": "ntail",
-        "body": "0"
+        "body": "0",
+        "model": "sky130_fd_pr__nfet_01v8",
+        "diagnostic_prefix": "@m.xm1.msky130_fd_pr__nfet_01v8"
       },
       "XM2": {
         "kind": "nfet",
         "drain": "n2",
         "gate": "vinn",
         "source": "ntail",
-        "body": "0"
+        "body": "0",
+        "model": "sky130_fd_pr__nfet_01v8",
+        "diagnostic_prefix": "@m.xm2.msky130_fd_pr__nfet_01v8"
       },
       "XM3": {
         "kind": "pfet",
         "drain": "n1",
         "gate": "n1",
         "source": "vdd",
-        "body": "vdd"
+        "body": "vdd",
+        "model": "sky130_fd_pr__pfet_01v8",
+        "diagnostic_prefix": "@m.xm3.msky130_fd_pr__pfet_01v8"
       },
       "XM4": {
         "kind": "pfet",
         "drain": "n2",
         "gate": "n1",
         "source": "vdd",
-        "body": "vdd"
+        "body": "vdd",
+        "model": "sky130_fd_pr__pfet_01v8",
+        "diagnostic_prefix": "@m.xm4.msky130_fd_pr__pfet_01v8"
       },
       "XM5": {
         "kind": "nfet",
         "drain": "ntail",
         "gate": "vbias_n",
         "source": "0",
-        "body": "0"
+        "body": "0",
+        "model": "sky130_fd_pr__nfet_01v8",
+        "diagnostic_prefix": "@m.xm5.msky130_fd_pr__nfet_01v8"
       },
       "XM6": {
         "kind": "nfet",
         "drain": "out",
         "gate": "vbias_n",
         "source": "0",
-        "body": "0"
+        "body": "0",
+        "model": "sky130_fd_pr__nfet_01v8",
+        "diagnostic_prefix": "@m.xm6.msky130_fd_pr__nfet_01v8"
       },
       "XM7": {
         "kind": "pfet",
         "drain": "out",
         "gate": "n2",
         "source": "vdd",
-        "body": "vdd"
+        "body": "vdd",
+        "model": "sky130_fd_pr__pfet_01v8",
+        "diagnostic_prefix": "@m.xm7.msky130_fd_pr__pfet_01v8"
       }
     }
   },
@@ -310,5 +326,10 @@
     "gain_reference_frequency_hz": 1,
     "unity_crossing": "first falling 0 dB crossing",
     "phase_margin_scope": "Unity negative feedback to VINP; open-loop small-signal estimate, not a general return-ratio or multiple-crossing stability proof"
+  },
+  "condition_parameters": {
+    "VDD": "vdd_v",
+    "VCM": "input_common_mode_v",
+    "CLOAD": "load_capacitance_f"
   }
 }

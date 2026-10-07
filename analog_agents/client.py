@@ -59,3 +59,49 @@ class LocalClient:
         validate(result, schema)
         record["status"] = "passed"
         return result
+
+
+def find_claude():
+    """CLAUDE_BIN, then PATH, then the newest VSCode-extension native binary."""
+    import glob, os, shutil
+    for c in (os.environ.get("CLAUDE_BIN"), os.environ.get("CLAUDE_CODE_EXECPATH"), shutil.which("claude")):
+        if c and os.path.exists(c):
+            return c
+    found = sorted(glob.glob(os.path.expanduser("~/.vscode-server/extensions/anthropic.claude-code-*/resources/native-binary/claude")))
+    if found:
+        return found[-1]
+    raise RuntimeError("claude CLI not found; set CLAUDE_BIN=/path/to/claude")
+
+
+class ClaudeCliClient(LocalClient):
+    """Drop-in replacement that asks Claude through the `claude -p` CLI (used when no GPU is idle)."""
+
+    def __init__(self, config, model="sonnet"):
+        self.config = config
+        self.calls = []
+        self.model = model
+
+    def _ask(self, prompt, payload, schema, record):
+        import os, subprocess
+        from jsonschema import validate
+        system = prompt + "\nReturn only a JSON object conforming to the supplied JSON schema."
+        proc = subprocess.run(
+            [find_claude(), "-p", "--model", self.model, "--tools", "",
+             "--output-format", "json", "--json-schema", json.dumps(schema),
+             "--system-prompt", system],
+            input=json.dumps(payload, ensure_ascii=False), capture_output=True, text=True,
+            timeout=600)
+        if proc.returncode:
+            raise RuntimeError(f"claude CLI failed: {proc.stderr[-500:]}")
+        out = json.loads(proc.stdout)
+        u = out.get("usage") or {}
+        pt = u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
+        record["usage"] = {"prompt_tokens": pt, "completion_tokens": u.get("output_tokens", 0),
+                           "total_tokens": pt + u.get("output_tokens", 0)}
+        record["raw_response"] = out.get("structured_output") or out.get("result")
+        result = out.get("structured_output")
+        if result is None:
+            result = json.loads(out["result"])
+        validate(result, schema)
+        record["status"] = "passed"
+        return result

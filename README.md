@@ -1,14 +1,47 @@
-# SKY130 两级运放：PMOS 第二级、DC 优先尺寸优化
+# 通用固定拓扑 Sizing Agent（附 SKY130 运放示例）
 
 **一句命令完成：选择空闲 GPU → 启动本地 Qwen → DC 检查与尺寸迭代 → 性能仿真 → 生成中英文 PDF → 关闭本次服务。**
 
 ```bash
-bash /home/xu/Multi-agent/scripts/run_all.sh
+SIZING_BACKEND=qwen bash /home/xu/Multi-agent/scripts/run_all.sh   # or SIZING_BACKEND=claude
+```
+
+## 选择模型后端（必须指定）
+
+运行时必须在命令前指定 `SIZING_BACKEND`，否则程序拒绝启动（`--baseline-only` 不调用模型，无需指定）。
+
+```bash
+# 本地 Qwen（需要空闲 GPU，自动启动并关闭服务）
+SIZING_BACKEND=qwen bash /home/xu/Multi-agent/scripts/run_all.sh
+
+# Claude Sonnet（通过 Claude Code CLI，不需要 GPU；GPU 繁忙时使用）
+SIZING_BACKEND=claude bash /home/xu/Multi-agent/scripts/run_all.sh
 ```
 
 [English README](README_EN.md)
 
-**本次更新只完成构建和静态检查，没有运行 Qwen、GPU 或 ngspice。** `results/` 内已有报告来自旧版本电路，不代表新 PMOS 第二级的性能；下次实际运行会归档旧报告并生成新报告。
+**本次已完成 33 项自动测试，并使用 Astra + 真实 ngspice 验证更新后的 agent。** 运行报告见下方本次验证结果。
+
+## 通用 sizing agent 与电路适配层
+
+当前 sizing agent 接受已经选定的拓扑，不负责选择拓扑或分配模块指标。
+你规划的流程是：顶层拓扑 → 模块指标分配 agent → 模块拓扑选择 agent → sizing agent。
+本次只实现并验证最后一层的通用化，前两类 agent 尚未实现。
+
+- `agents/sizing_agent/prompt.md`：通用工作规则。要求读取 reference 中的约束，不预设两级运放、工艺、管子数量、极性或性能公式。
+- `agents/sizing_agent/agent.py`：通用参数提案与校验。除允许的 `.param` 数值外，网表文本必须保持不变；范围、整数、匹配和乘积尺寸限制来自输入数据。
+- `reference.spice`：该拓扑的连接、共享参数表达式、固定条件、可调范围、工作区要求和测量定义。新增 `SIZING CONTRACT` 注释完整描述当前示例约束。
+- `target.json`：输入性能 specs，以及 Python 可执行的同一套约束。`condition_parameters` 显式绑定条件与参数；可选 MOS 验收项用 `model` 和 `diagnostic_prefix` 指定真实模型和日志路径，不再由 agent 拼接 SKY130 名称。
+
+reference 的自然语言约束由模型阅读，Python 不会自动把任意自然语言转换成校验程序。因此新增电路时，必须同步填写对应结构化约束；不要只改注释或只改 target。共享表达式与禁止改拓扑仍由 Python 强制保护。
+
+上层 agent 可调用 `SizingAgent.run(target, reference, candidate, full_log, measurements, history)`。
+返回值仍是 `analysis` 和至多三个 `changes`；由 `apply_changes` 校验再交给仿真器。
+可优化参数目前要求一行一个 `.param NAME=标量`；固定表达式可引用这些标量。边界允许负值或零，因此不再隐含所有参数都是正的晶体管尺寸。
+
+**通用 sizing 不等于任意电路的仿真/报告已自动适配。** 当前命令行入口仍运行 `circuits/two_stage_opamp` 示例；ngspice 执行器仍使用当前 SKY130 工具配置、DC→AC 测量协议与 MOS 饱和验收器，报告绘图仍支持现有运放拓扑。接入电阻网络、比较器、振荡器等模块时，应提供对应的仿真/工作区验收/测量和绘图适配，不能沿用运放的饱和判据、PM 公式或测量脚本。sizing agent 本身无需再添加这些电路专属规则。
+
+标准一行命令继续使用 Qwen；GPU 忙时会退出，不会抢占别人的进程，也不会自动连接 Astra。本次 Astra 替代由 Codex 会话提供，结果独立保存，不修改 Qwen 的长期配置。
 
 ## 当前电路是什么
 
@@ -36,7 +69,7 @@ bash /home/xu/Multi-agent/scripts/run_all.sh
 | M7 | `W_STAGE2` | `L_STAGE2` |
 
 `N_TAIL` 与 `N_STAGE2_BIAS` 必须是正整数，可取不同值；当前初始值均为 1。
-W/L 以微米计。基础参数及乘积后的实际尺寸都受 `target.json` 限制：当前 M5 的 W 上限为 100 µm，M6/M7 为 200 µm。
+W/L 以微米计。基础参数及乘积后的实际尺寸都受 `target.json` 限制：所有 MOS 的有效 W 上限均为 100 µm；这不能保证范围内每个 W/L 组合都存在模型分档。
 网表强制共享表达式，Python 拒绝小数倍率、越界值、旧值不匹配和改变器件连接的提案。
 旧参数 `N_STAGE2_LOAD`、`WBP0`、`L_BIAS_P` 不再允许优化；M3/M4 没有可调倍率。
 
@@ -115,7 +148,7 @@ DC 不通过时，AC 指标显示“未仿真”，不会沿用旧结果或填�
 | DC／性能阶段切换 | `main.py` |
 | 参考网表 | `circuits/two_stage_opamp/reference/reference.spice` |
 | 指标、边界、倍率、DC 映射、AC 约定 | `circuits/two_stage_opamp/specs/target.json` |
-| Qwen 规则及参数校验 | `agents/sizing_agent/prompt.md`、`agent.py` |
+| 通用 sizing 规则及参数校验 | `agents/sizing_agent/prompt.md`、`agent.py` |
 | 仿真执行与结果解析 | `simulator/ngspice_runner.py` |
 | 双语报告、整体连线图 | `simulator/report_generator.py` |
 | 模型服务配置 | `config/settings.json` |
@@ -145,3 +178,11 @@ source scripts/env.sh
 ```
 
 本次只更新了相关测试，未执行测试或仿真。静态检查不能保证电路收敛或性能达标。
+
+## 本次验证结果（2026-10-07）
+
+33 项测试通过，包括无 MOS 电阻网络及非 SKY130 模型的 sizing 校验。检测到 4 张 GPU 均忙，实际由 Astra 读取通用 prompt 和当前 reference 后完成决策，ngspice 真实仿真。3 次迭代（1 次 DC 修复、2 次性能优化）、7 次仿真调用，154.37 秒后全部目标达标：增益 69.7099 dB，UGB 11.6066 MHz，PM 72.0794°，功耗 234.639 µW，全部 8 个 MOS 通过 DC。成功率仅指本次运行 1/1，不能推断对任意电路的成功率。
+
+最终候选参数：W_STAGE2=100、N_STAGE2_BIAS=4、CC=2.5p；原 reference 初始参数保留。Astra token 用量不可获取，报告标记未知。
+
+[中文报告](circuits/two_stage_opamp/results/astra_20261007_113433/final_report_zh.pdf) · [英文报告](circuits/two_stage_opamp/results/astra_20261007_113433/final_report.pdf) · [运行摘要](circuits/two_stage_opamp/results/astra_20261007_113433/summary.json)

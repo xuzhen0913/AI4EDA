@@ -1,14 +1,45 @@
-# SKY130 op-amp: PMOS second gain stage, DC-first sizing
+# Generic fixed-topology sizing agent (with SKY130 amplifier example)
 
 **One command: select an idle GPU → start local Qwen → DC-gated sizing → performance simulation → generate English/Chinese PDFs → stop the service started by this invocation.**
 
 ```bash
-bash /home/xu/Multi-agent/scripts/run_all.sh
+SIZING_BACKEND=qwen bash /home/xu/Multi-agent/scripts/run_all.sh   # or SIZING_BACKEND=claude
+```
+
+## Choosing the model backend (required)
+
+`SIZING_BACKEND` must be set on the command line; without it the run refuses to start (`--baseline-only` needs no model).
+
+```bash
+# Local Qwen (needs an idle GPU; starts and stops the service automatically)
+SIZING_BACKEND=qwen bash /home/xu/Multi-agent/scripts/run_all.sh
+
+# Claude Sonnet via the Claude Code CLI (no GPU needed; use when GPUs are busy)
+SIZING_BACKEND=claude bash /home/xu/Multi-agent/scripts/run_all.sh
 ```
 
 [中文 README](README.md)
 
-**This revision was constructed and statically checked only. No Qwen, GPU, ngspice or regression tests were run.** Existing results/PDFs describe the previous circuit, not the new PMOS stage. A future run archives the previous reports and produces new evidence.
+**33 automated tests passed; the updated agent was exercised with Astra and real ngspice.** See the current validation result below.
+
+## Generic sizing agent and circuit adapters
+
+The sizing agent receives an already selected topology. The intended architecture is:
+top-level topology → module-spec allocation agent → topology-selection agent → sizing agent.
+Only the last layer is generalized here; the upstream agents are not implemented yet.
+
+- `agents/sizing_agent/prompt.md` contains topology-independent rules: read and obey the reference constraints without assuming an amplifier, process, device count, polarity or metric formula.
+- `agents/sizing_agent/agent.py` proposes and validates scalar changes. All netlist text except permitted parameter values remains immutable. Bounds, integer ratios, optional matching and effective dimensions are input data.
+- `reference.spice` describes connections, shared expressions, fixed conditions, bounds, operating regions and measurements. Its new `SIZING CONTRACT` documents the example circuit completely.
+- `target.json` contains requested performance and machine-readable constraints. `condition_parameters` explicitly binds conditions to parameters; optional MOS policies declare `model` and `diagnostic_prefix`, instead of assembling SKY130 names inside the agent.
+
+Natural-language reference comments are read by the model, not compiled automatically into Python validators. A new circuit must supply matching structured constraints; changing comments alone is insufficient. Python still enforces immutable topology and shared expressions.
+
+The upstream caller can use `SizingAgent.run(target, reference, candidate, full_log, measurements, history)` and validate its `analysis` / up-to-three `changes` response through `apply_changes` before simulation. Adjustable inputs currently use one scalar `.param NAME=value` per line; fixed expressions may reference those scalars. Signed or zero values are permitted when declared bounds allow them.
+
+**A generic sizing agent is not an automatic simulator/report adapter for every circuit.** The current CLI still selects `circuits/two_stage_opamp`; the ngspice adapter retains the SKY130 tool configuration, DC→AC protocol and MOS saturation policy, and report drawing supports the existing amplifier topologies. Other circuit families need appropriate operating-point checks, measurements, simulation scripts and report drawings. Do not reuse amplifier saturation or PM assumptions for comparators, oscillators or passive networks. Those circuit-specific rules do not belong in the generic sizing agent.
+
+The standard one-command launcher still uses Qwen and exits when no GPU is idle; it does not evict other jobs or automatically connect to Astra. This test uses an Astra replacement supplied by the Codex session, with separate outputs and unchanged long-term Qwen configuration.
 
 ## Actual topology
 
@@ -37,7 +68,7 @@ W_STAGE2/L_STAGE2 now size M7, not M6. N_STAGE2_BIAS controls M6's width relativ
 
 N_TAIL and N_STAGE2_BIAS are independent positive integers, initially both 1.
 W/L are in micrometers. Base parameters and effective product dimensions are bounded:
-current width maxima are 100 um for M5 and 200 um for M6/M7; target.json is authoritative.
+all effective MOS widths are capped at 100 um; valid bounds do not guarantee a PDK model bin for every W/L combination.
 Netlist expressions enforce sharing. Python rejects fractional ratios, out-of-range sizes,
 stale old_value fields and changes to device connectivity. Removed parameters
 N_STAGE2_LOAD, WBP0 and L_BIAS_P are no longer allowed. M3/M4 have no tunable ratio.
@@ -171,3 +202,11 @@ source scripts/env.sh
 ```
 
 Tests were adapted but not executed. Static checking does not establish convergence or performance.
+
+## Validation run (2026-10-07)
+
+All 33 tests passed, including passive-network sizing and a non-SKY130 model. All four GPUs were busy, so Astra read the generic prompt and current reference and supplied decisions to real ngspice simulations. All targets passed after 3 iterations (1 DC repair, 2 performance decisions), 7 simulation calls and 154.37 seconds: gain 69.7099 dB, UGB 11.6066 MHz, PM 72.0794 degrees, power 234.639 uW. All eight MOS devices passed DC. Success 1/1 describes only this run, not arbitrary circuit families.
+
+Final candidate: W_STAGE2=100, N_STAGE2_BIAS=4, CC=2.5p. Reference initial values are retained. Astra token usage is unavailable and recorded as unknown.
+
+[English report](circuits/two_stage_opamp/results/astra_20261007_113433/final_report.pdf) · [Chinese report](circuits/two_stage_opamp/results/astra_20261007_113433/final_report_zh.pdf) · [Run summary](circuits/two_stage_opamp/results/astra_20261007_113433/summary.json)

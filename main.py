@@ -3,6 +3,7 @@ import argparse
 from datetime import datetime, timezone
 import fcntl
 import json
+import os
 from pathlib import Path
 import shutil
 import time
@@ -96,7 +97,7 @@ def run(baseline_only=False):
         (results/'candidate.spice').write_text(candidate.read_text())
         summary=dict(status=status,error=error,iteration_count=len(history),dc_iteration_count=state['dc_iterations'],
             performance_iteration_count=len(history)-state['dc_iterations'],simulation_count=runner.count,
-            design_backend='local_qwen',model=load_config()['served_model'],
+            design_backend='claude_cli' if os.environ.get('SIZING_BACKEND')=='claude' else 'local_qwen',model='sonnet' if os.environ.get('SIZING_BACKEND')=='claude' else load_config()['served_model'],
             workflow_completed=status in ('targets_passed','max_iterations_reached','dc_iteration_limit'),
             max_iterations=limits['max_iterations'],max_dc_iterations=limits['max_dc_iterations'],
             optimization_start_time=start_time,optimization_end_time=datetime.now(timezone.utc).isoformat(),
