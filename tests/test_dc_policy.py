@@ -14,7 +14,7 @@ TARGET=json.loads((ROOT/'circuits/two_stage_opamp/specs/target.json').read_text(
 
 
 def diagnostics():
-    values={'v(vdd)':1.8,'v(vinp)':.9,'v(vinn)':.9,'v(vbias_n)':.7,'v(vbias_p)':1.1,'v(ntail)':.2,'v(n1)':.9,'v(n2)':.9,'v(out)':.9}
+    values={'v(vdd)':1.8,'v(vinp)':.9,'v(vinn)':.9,'v(vbias_n)':.7,'v(ntail)':.2,'v(n1)':.9,'v(n2)':.9,'v(out)':.9}
     for name,spec in TARGET['dc_acceptance']['devices'].items():
         prefix='@m.'+name.lower()+'.msky130_fd_pr__'+spec['kind']+'_01v8'
         values.update({prefix+'['+key+']':v for key,v in {'id':1e-5,'vgs':.7,'vds':.7,'vth':.3,'vdsat':.1}.items()})
@@ -39,7 +39,7 @@ def test_dc_missing_ac_is_expected_but_full_missing_ac_fails():
     dc=parse_log(text,0,TARGET,'dc');assert dc['dc_passed'] and dc['simulation_valid']
     assert dc['metrics']['ugb_hz'] is None and not dc['all_targets_passed']
     assert not parse_log(text,0,TARGET,'full')['simulation_valid']
-    full=text+'dc_gain_db = 70\nugb_hz = 2e7\nphase_margin_deg = 70\n'
+    full=text+'dc_gain_db = 70\nugb_hz = 2e7\nphase_margin_deg = 70\nloop_real_lf = 1000\n'
     assert parse_log(full,0,TARGET,'full')['all_targets_passed']
     assert not parse_log(full+'Error: convergence failed\n',0,TARGET,'full')['all_targets_passed']
 
@@ -163,3 +163,54 @@ def test_rejected_stale_proposal_preserves_candidate_and_consumes_budget(tmp_pat
     assert status=='dc_iteration_limit' and len(history)==5
     assert candidate.read_text()==REF and all(not x['proposal_accepted'] for x in history)
     assert all('old_value' in x['validation_error'] for x in history)
+
+
+def test_pmos_stage_terminal_policy_and_removed_parameters():
+    policy=TARGET['dc_acceptance']['devices']
+    assert len(policy)==8 and 'XMBIAS_P' not in policy
+    assert policy['XM6']['gate']=='vbias_n' and policy['XM6']['kind']=='nfet'
+    assert policy['XM7']['gate']=='n2' and policy['XM7']['kind']=='pfet'
+    allowed=TARGET['optimization']['allowed_parameters']
+    assert 'N_STAGE2_BIAS' in allowed
+    assert not {'N_STAGE2_LOAD','WBP0','L_BIAS_P'}.intersection(allowed)
+    assert TARGET['optimization']['device_dimensions']['XM6']=={'W':'N_STAGE2_BIAS*WBN0','L':'L_BIAS_N'}
+    assert TARGET['optimization']['device_dimensions']['XM7']=={'W':'W_STAGE2','L':'L_STAGE2'}
+    validate_candidate(REF,REF,TARGET)
+
+
+def test_m6_bias_and_m7_signal_gate_have_correct_dc_polarity():
+    op=diagnostics();op['v(n2)']=1.6
+    result=dc_check(op,TARGET)
+    assert result['devices']['XM6']['passed']
+    assert not result['devices']['XM7']['checks']['overdrive']
+    op=diagnostics();op['v(vbias_n)']=.1
+    result=dc_check(op,TARGET)
+    assert not result['devices']['XM6']['checks']['overdrive']
+    assert result['devices']['XM7']['passed']
+
+
+def test_dc_mapping_cannot_silently_use_old_nmos_stage():
+    old=REF.replace('XM6 out vbias_n 0 0','XM6 out n2 0 0')
+    with pytest.raises(ValueError,match='terminal mapping'):validate_candidate(old,old,TARGET)
+
+
+def test_ac_polarity_failure_does_not_invalidate_passing_dc():
+    text='\n'.join(f'{k} = {v}' for k,v in diagnostics().items())
+    text+='\npower_w = 0.0001\nEND_DC_OPERATING_POINT\n'
+    text+='dc_gain_db = 70\nugb_hz = 2e7\nphase_margin_deg = 70\n'
+    for value in ['-1000','0','nan']:
+        result=parse_log(text+'loop_real_lf = '+value+'\n',0,TARGET,'full')
+        assert result['dc_passed'] and not result['all_targets_passed']
+        assert not result['ac_polarity']['passed']
+    result=parse_log(text+'loop_real_lf = 1000\n',0,TARGET,'full')
+    assert result['dc_passed'] and result['all_targets_passed']
+
+
+def test_reference_differential_gain_and_power_conventions():
+    assert 'let differential_gain = v(out)/differential_input' in REF
+    assert 'let differential_input = v(vinp)-v(vinn)' in REF
+    assert 'let loop_gain = -differential_gain' in REF
+    assert 'let gain = db(differential_gain)' in REF
+    assert 'let loop_phase_deg = 180/PI*cph(loop_gain)' in REF
+    assert 'let power_w = -i(VSUPPLY)*v(vdd)' in REF
+    assert 'IBIAS_P ' not in REF

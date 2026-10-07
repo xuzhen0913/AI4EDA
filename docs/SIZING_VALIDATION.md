@@ -1,3 +1,8 @@
+> Historical validation of the previous NMOS-gain-stage topology. On 2026-10-07 the
+> project was adapted to the user-provided PMOS M7 gain stage and NMOS M6 bias sink.
+> That revision received static checks only; the results and test-pass counts below
+> must not be attributed to the new circuit. See README.md and README_EN.md.
+
 # DC-first validation — 2026-10-06
 
 Implemented shared input W/L, shared mirror L and positive-integer output/reference width ratios.

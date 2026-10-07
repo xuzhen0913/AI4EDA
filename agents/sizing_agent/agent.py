@@ -50,6 +50,19 @@ def validate_candidate(reference, candidate, target):
         high=next(v for k,v in bounds.items() if k.startswith('max'))
         if value<=0 or not low<=value<=high: raise ValueError(f'{name} out of bounds')
     logical=re.sub(r'\n\+\s*',' ',candidate)
+    # DC policy must describe the actual terminals and model of every device.
+    devices={f[0].upper():f for line in logical.splitlines()
+             if (f:=line.split()) and f[0].upper().startswith('XM')}
+    expected=target['dc_acceptance']['devices']
+    if set(devices)!=set(expected):
+        raise ValueError('DC device set differs from reference/candidate')
+    for name,spec in expected.items():
+        fields=devices[name]
+        terminals=tuple(spec[k].lower() for k in ('drain','gate','source','body'))
+        if tuple(v.lower() for v in fields[1:5])!=terminals:
+            raise ValueError('DC terminal mapping differs from netlist: '+name)
+        if fields[5].lower()!='sky130_fd_pr__'+spec['kind']+'_01v8':
+            raise ValueError('DC device polarity/model differs from netlist: '+name)
     for constraint in target['optimization'].get('matching_constraints',[]):
         for device in constraint['devices']:
             line=re.search(r'^'+re.escape(device)+r'\s+.*$',logical,re.M|re.I)

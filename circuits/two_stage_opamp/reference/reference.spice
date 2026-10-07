@@ -6,8 +6,8 @@
 *   M1/M2 : NMOS differential pair
 *   M3/M4 : PMOS current-mirror active load
 *   M5    : NMOS tail current source
-*   M6    : NMOS second-stage common-source device
-*   M7    : PMOS second-stage current-source load
+*   M6    : NMOS second-stage bias current source
+*   M7    : PMOS second-stage common-source gain device
 *
 * Process : SKY130
 * Corner  : TT
@@ -47,20 +47,15 @@
 .param W_LOAD=10
 .param L_LOAD=0.5
 
-* Tail current source: M5
-
-* Second-stage NMOS: M6
-.param W_STAGE2=30
-.param L_STAGE2=0.5
-
-* Second-stage PMOS load: M7
-
-* Bias reference devices
+* NMOS bias reference / current mirrors: MBIAS_N, M5, M6
+* M5 and M6 share L_BIAS_N with MBIAS_N.
+* Their widths are independent positive-integer multiples of WBN0.
 .param WBN0=10
 .param L_BIAS_N=1.0
 
-.param WBP0=10
-.param L_BIAS_P=1.0
+* Second-stage PMOS common-source gain device: M7
+.param W_STAGE2=30
+.param L_STAGE2=0.5
 
 * Reference bias current
 .param IBIAS=20u
@@ -71,11 +66,12 @@
 * HARD STRUCTURAL MATCHING: ratios must be positive integers.
 * M1/M2: identical W_IN and L_IN.
 * M3/M4: shared L_LOAD and W_LOAD, M3 diode-connected.
-* MBIAS_N/M5: shared L_BIAS_N; W5=N_TAIL*WBN0.
-* MBIAS_P/M7: shared L_BIAS_P; W7=N_STAGE2_LOAD*WBP0.
+* MBIAS_N/M5/M6: shared L_BIAS_N.
+* W5=N_TAIL*WBN0 and W6=N_STAGE2_BIAS*WBN0.
+* N_TAIL and N_STAGE2_BIAS must be positive integers, but may differ.
 * Python rejects fractional N and effective device widths outside target bounds.
 .param N_TAIL=1
-.param N_STAGE2_LOAD=1
+.param N_STAGE2_BIAS=1
 
 
 * ============================================================
@@ -135,29 +131,23 @@ XM5 ntail vbias_n 0 0 sky130_fd_pr__nfet_01v8
 
 
 * ============================================================
-* PMOS bias generation for second-stage load
-* ============================================================
-
-IBIAS_P vbias_p 0 {IBIAS}
-
-XMBIAS_P vbias_p vbias_p vdd vdd sky130_fd_pr__pfet_01v8
-+ W={WBP0} L={L_BIAS_P}
-
-
-* ============================================================
 * Second Stage
 * ============================================================
 
-* NMOS common-source gain device
+* NMOS bias current source.
+* Gate shares vbias_n with M5 and MBIAS_N.
+* L6 = L5 = L_MBIAS_N = L_BIAS_N.
+* W6 is an independent positive-integer multiple of WBN0.
 
-XM6 out n2 0 0 sky130_fd_pr__nfet_01v8
+XM6 out vbias_n 0 0 sky130_fd_pr__nfet_01v8
++ W={N_STAGE2_BIAS*WBN0} L={L_BIAS_N}
+
+
+* PMOS common-source gain device.
+* Gate is driven by the first-stage output n2.
+
+XM7 out n2 vdd vdd sky130_fd_pr__pfet_01v8
 + W={W_STAGE2} L={L_STAGE2}
-
-
-* PMOS current-source load
-
-XM7 out vbias_p vdd vdd sky130_fd_pr__pfet_01v8
-+ W={N_STAGE2_LOAD*WBP0} L={L_BIAS_P}
 
 
 * ============================================================
@@ -175,13 +165,15 @@ CLOAD_OUT out 0 {CLOAD}
 
 
 * DC-first testbench. Runner removes the marked AC block for DC-only checks.
-* Output is inverting relative to VINP-VINN; use -V(out) for loop phase.
+* M7 is PMOS common-source; output still inverts VINP-VINN.
+* A_diff = V(out)/(V(vinp)-V(vinn)); unity negative-feedback loop gain = -A_diff.
+* PM is an open-loop unity-feedback estimate with feedback applied to VINP.
 .control
 set noaskquit
 set numdgt=10
 op
 echo DC_OPERATING_POINT
-print v(vdd) v(vinp) v(vinn) v(vbias_n) v(vbias_p)
+print v(vdd) v(vinp) v(vinn) v(vbias_n)
 print v(ntail) v(n1) v(n2) v(out) i(VSUPPLY)
 let supply_current_a = -i(VSUPPLY)
 let power_w = -i(VSUPPLY)*v(vdd)
@@ -250,19 +242,16 @@ print @m.xmbias_n.msky130_fd_pr__nfet_01v8[vgs]
 print @m.xmbias_n.msky130_fd_pr__nfet_01v8[vds]
 print @m.xmbias_n.msky130_fd_pr__nfet_01v8[vth]
 print @m.xmbias_n.msky130_fd_pr__nfet_01v8[vdsat]
-echo DEVICE_xmbias_p
-print @m.xmbias_p.msky130_fd_pr__pfet_01v8[id]
-print @m.xmbias_p.msky130_fd_pr__pfet_01v8[gm]
-print @m.xmbias_p.msky130_fd_pr__pfet_01v8[gds]
-print @m.xmbias_p.msky130_fd_pr__pfet_01v8[vgs]
-print @m.xmbias_p.msky130_fd_pr__pfet_01v8[vds]
-print @m.xmbias_p.msky130_fd_pr__pfet_01v8[vth]
-print @m.xmbias_p.msky130_fd_pr__pfet_01v8[vdsat]
 echo END_DC_OPERATING_POINT
 * BEGIN_AC_ANALYSIS
 ac dec 100 1 1G
-let gain = db(v(out))
-let loop_phase_deg = 180/PI*cph(-v(out))
+let differential_input = v(vinp)-v(vinn)
+let differential_gain = v(out)/differential_input
+let loop_gain = -differential_gain
+let gain = db(differential_gain)
+let loop_phase_deg = 180/PI*cph(loop_gain)
+let loop_real = real(loop_gain)
+meas ac loop_real_lf FIND loop_real AT=1
 meas ac dc_gain_db FIND gain AT=1
 meas ac ugb_hz WHEN gain=0 FALL=1
 meas ac phase_at_ugb FIND loop_phase_deg WHEN gain=0 FALL=1

@@ -33,12 +33,10 @@
       "L_STAGE2",
       "WBN0",
       "L_BIAS_N",
-      "WBP0",
-      "L_BIAS_P",
       "IBIAS",
       "CC",
       "N_TAIL",
-      "N_STAGE2_LOAD"
+      "N_STAGE2_BIAS"
     ],
     "parameter_bounds": {
       "W_IN": {
@@ -69,10 +67,6 @@
         "min_um": 0.15,
         "max_um": 2.0
       },
-      "L_BIAS_P": {
-        "min_um": 0.15,
-        "max_um": 2.0
-      },
       "IBIAS": {
         "min_a": 1e-06,
         "max_a": 0.0001
@@ -85,15 +79,11 @@
         "min_um": 1.0,
         "max_um": 100.0
       },
-      "WBP0": {
-        "min_um": 1.0,
-        "max_um": 100.0
-      },
       "N_TAIL": {
         "min": 1,
         "max": 20
       },
-      "N_STAGE2_LOAD": {
+      "N_STAGE2_BIAS": {
         "min": 1,
         "max": 20
       }
@@ -125,7 +115,7 @@
     "max_dc_iterations": 5,
     "integer_parameters": [
       "N_TAIL",
-      "N_STAGE2_LOAD"
+      "N_STAGE2_BIAS"
     ],
     "device_dimensions": {
       "XM1": {
@@ -152,17 +142,13 @@
         "W": "N_TAIL*WBN0",
         "L": "L_BIAS_N"
       },
-      "XMBIAS_P": {
-        "W": "WBP0",
-        "L": "L_BIAS_P"
-      },
       "XM7": {
-        "W": "N_STAGE2_LOAD*WBP0",
-        "L": "L_BIAS_P"
-      },
-      "XM6": {
         "W": "W_STAGE2",
         "L": "L_STAGE2"
+      },
+      "XM6": {
+        "W": "N_STAGE2_BIAS*WBN0",
+        "L": "L_BIAS_N"
       }
     },
     "device_bounds": {
@@ -202,12 +188,6 @@
         "min_l_um": 0.15,
         "max_l_um": 2
       },
-      "XMBIAS_P": {
-        "min_w_um": 1,
-        "max_w_um": 100,
-        "min_l_um": 0.15,
-        "max_l_um": 2
-      },
       "XM7": {
         "min_w_um": 1,
         "max_w_um": 200,
@@ -233,9 +213,9 @@
         "ratio": "N_TAIL"
       },
       {
-        "reference": "XMBIAS_P",
-        "output": "XM7",
-        "ratio": "N_STAGE2_LOAD"
+        "reference": "XMBIAS_N",
+        "output": "XM6",
+        "ratio": "N_STAGE2_BIAS"
       }
     ]
   },
@@ -257,60 +237,78 @@
     "minimum_overdrive_v": 0.0,
     "minimum_saturation_margin_v": 0.0,
     "devices": {
+      "XMBIAS_N": {
+        "kind": "nfet",
+        "drain": "vbias_n",
+        "gate": "vbias_n",
+        "source": "0",
+        "body": "0"
+      },
       "XM1": {
         "kind": "nfet",
         "drain": "n1",
         "gate": "vinp",
-        "source": "ntail"
+        "source": "ntail",
+        "body": "0"
       },
       "XM2": {
         "kind": "nfet",
         "drain": "n2",
         "gate": "vinn",
-        "source": "ntail"
+        "source": "ntail",
+        "body": "0"
       },
       "XM3": {
         "kind": "pfet",
         "drain": "n1",
         "gate": "n1",
-        "source": "vdd"
+        "source": "vdd",
+        "body": "vdd"
       },
       "XM4": {
         "kind": "pfet",
         "drain": "n2",
         "gate": "n1",
-        "source": "vdd"
-      },
-      "XMBIAS_N": {
-        "kind": "nfet",
-        "drain": "vbias_n",
-        "gate": "vbias_n",
-        "source": "0"
+        "source": "vdd",
+        "body": "vdd"
       },
       "XM5": {
         "kind": "nfet",
         "drain": "ntail",
         "gate": "vbias_n",
-        "source": "0"
-      },
-      "XMBIAS_P": {
-        "kind": "pfet",
-        "drain": "vbias_p",
-        "gate": "vbias_p",
-        "source": "vdd"
-      },
-      "XM7": {
-        "kind": "pfet",
-        "drain": "out",
-        "gate": "vbias_p",
-        "source": "vdd"
+        "source": "0",
+        "body": "0"
       },
       "XM6": {
         "kind": "nfet",
         "drain": "out",
+        "gate": "vbias_n",
+        "source": "0",
+        "body": "0"
+      },
+      "XM7": {
+        "kind": "pfet",
+        "drain": "out",
         "gate": "n2",
-        "source": "0"
+        "source": "vdd",
+        "body": "vdd"
       }
     }
+  },
+  "topology": {
+    "second_stage_gain_device": "XM7",
+    "second_stage_bias_device": "XM6",
+    "bias_reference_device": "XMBIAS_N",
+    "description": "NMOS differential input, matched PMOS mirror, PMOS common-source second stage with NMOS bias sink"
+  },
+  "ac_validation": {
+    "require_positive_loop_real_lf": true,
+    "measurement": "loop_real_lf",
+    "differential_input": "v(vinp)-v(vinn)",
+    "open_loop_transfer": "v(out)/(v(vinp)-v(vinn))",
+    "normalized_loop_transfer": "-open_loop_transfer",
+    "gain_reference_frequency_hz": 1,
+    "unity_crossing": "first falling 0 dB crossing",
+    "phase_margin_scope": "Unity negative feedback to VINP; open-loop small-signal estimate, not a general return-ratio or multiple-crossing stability proof"
   }
 }

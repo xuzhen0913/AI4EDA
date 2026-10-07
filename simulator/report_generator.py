@@ -11,6 +11,86 @@ from agents.sizing_agent.agent import parameters
 
 
 def topology(netlist):
+    """Dispatch from saved netlist, so historical NMOS-stage reports remain reproducible."""
+    logical=re.sub(r'\n\+\s*',' ',netlist)
+    if re.search(r'^XM6\s+out\s+n2\s',logical,re.M|re.I):
+        return legacy_topology(netlist)
+    return pmos_topology(netlist)
+
+
+def pmos_topology(netlist):
+    """Connected PMOS-gain/NMOS-bias schematic, checked against actual connectivity."""
+    logical=re.sub(r'\n\+\s*',' ',netlist)
+    devices={f[0].upper():f for line in logical.splitlines() if (f:=line.split()) and f[0].upper().startswith('XM')}
+    expected={'XM1':('n1','vinp','ntail','0'),'XM2':('n2','vinn','ntail','0'),
+        'XM3':('n1','n1','vdd','vdd'),'XM4':('n2','n1','vdd','vdd'),
+        'XM5':('ntail','vbias_n','0','0'),'XM6':('out','vbias_n','0','0'),
+        'XM7':('out','n2','vdd','vdd'),'XMBIAS_N':('vbias_n','vbias_n','0','0')}
+    if set(devices)!=set(expected):raise ValueError('Unexpected PMOS-stage device set')
+    for name,nodes in expected.items():
+        kind='pfet' if name in ('XM3','XM4','XM7') else 'nfet'
+        if tuple(v.lower() for v in devices[name][1:5])!=nodes or devices[name][5]!='sky130_fd_pr__'+kind+'_01v8':
+            raise ValueError('Schematic/netlist mismatch: '+name)
+    elements={f[0].upper():f for line in logical.splitlines() if (f:=line.split()) and f[0][0].upper() in 'CIV'}
+    expected_elements={'CCOMP':('n2','out'),'CLOAD_OUT':('out','0'),'IBIAS_N':('vdd','vbias_n'),
+                       'VSUPPLY':('vdd','0'),'VINP':('vinp','0'),'VINN':('vinn','0')}
+    if set(elements)!=set(expected_elements):raise ValueError('Unexpected source/passive set')
+    for name,nodes in expected_elements.items():
+        if tuple(elements[name][1:3])!=nodes:raise ValueError('Unexpected source/passive wiring: '+name)
+    values=parameters(netlist);d=Drawing(500,445);ink=colors.HexColor('#173f58')
+    def label(x,y,text,size=8):d.add(String(x,y,text,fontName='Helvetica',fontSize=size,fillColor=ink))
+    def wire(*points):
+        for (x,y),(X,Y) in zip(points,points[1:]):d.add(Line(x,y,X,Y,strokeColor=ink,strokeWidth=1.1))
+    def dot(x,y):d.add(Circle(x,y,2,strokeColor=ink,fillColor=ink))
+    def mos(x,y,name,pmos=False):
+        wire((x,y+20),(x,y+11),(x+6,y+11),(x+6,y-11),(x,y-11),(x,y-20))
+        wire((x-7,y-14),(x-7,y+14));wire((x-25,y),(x-7,y))
+        if pmos:d.add(Circle(x-11,y,3,strokeColor=ink,fillColor=colors.white))
+        label(x+10,y+2,name)
+    wire((30,415),(480,415));label(31,428,'VDD = '+values['VDD']+' V',10)
+    wire((30,60),(480,60));label(31,43,'0 / GND',9)
+    wire((255,60),(255,52));wire((246,52),(264,52));wire((249,49),(261,49));wire((252,46),(258,46))
+    mos(45,120,'MBIAS_N')
+    d.add(Circle(45,330,13,strokeColor=ink,fillColor=colors.white))
+    wire((45,338),(45,323));wire((42,327),(45,323),(48,327))
+    label(63,333,'IBIAS_N',7);label(63,322,values['IBIAS']+'A',7)
+    wire((45,415),(45,343));wire((45,317),(45,140));wire((45,100),(45,60))
+    wire((45,190),(15,190),(15,120),(20,120));dot(45,190)
+    wire((45,170),(100,170),(100,120),(175,120));dot(45,170)
+    # The same bias net reaches M5 and M6; no PMOS bias reference exists.
+    wire((100,170),(370,170),(370,180),(405,180));dot(100,170)
+    label(48,180,'VBIAS_N',7);label(292,179,'VBIAS_N',7)
+    mos(150,350,'M3',True);mos(250,350,'M4',True)
+    mos(150,240,'M1');mos(250,240,'M2')
+    for x in (150,250):
+        wire((x,415),(x,370));wire((x,330),(x,260));wire((x,220),(x,195));dot(x,415)
+    wire((150,300),(110,300),(110,380),(225,380),(225,350));dot(150,300)
+    wire((110,350),(125,350));dot(110,350);label(154,311,'N1')
+    wire((80,240),(125,240));label(80,250,'VINP (+AC)')
+    wire((210,240),(225,240));label(193,263,'VINN (-AC)')
+    wire((150,195),(250,195));wire((200,195),(200,140));dot(200,195)
+    label(205,203,'NTAIL',7);mos(200,120,'M5');wire((200,100),(200,60))
+    mos(430,350,'M7',True);mos(430,180,'M6')
+    wire((430,415),(430,370));dot(430,415)
+    wire((430,330),(430,200));wire((430,160),(430,60))
+    # N2 goes to the PMOS gate, not the NMOS gate.
+    wire((250,280),(340,280),(340,350),(405,350));dot(250,280);label(254,288,'N2')
+    label(356,364,'PMOS gain',7);label(356,194,'NMOS bias',7)
+    wire((250,305),(282,305));wire((288,305),(430,305));dot(250,305);dot(430,305)
+    wire((282,296),(282,314));wire((288,296),(288,314));label(259,320,'CC = '+values['CC']+'F',7)
+    wire((430,240),(480,240));dot(430,240);label(442,253,'OUT',10)
+    wire((475,240),(475,155));wire((465,155),(485,155));wire((465,149),(485,149));wire((475,149),(475,60));dot(475,240)
+    label(443,131,'CL = '+values['CLOAD']+'F',7)
+    for x,y in [(150,380),(200,170),(340,305)]:
+        d.add(Line(x,y-3,x,y+3,strokeColor=colors.white,strokeWidth=3));wire((x-3,y),(x+3,y))
+    for x in (45,200,430,475):dot(x,60)
+    dot(45,415)
+    label(12,24,'Filled dots = junctions; crossings with gaps are NOT connected.',8)
+    label(12,10,'Bodies: all NMOS -> GND; all PMOS -> VDD. Inputs are referenced to GND.',8)
+    return d
+
+
+def legacy_topology(netlist):
     """Connected schematic for the fixed reference, guarded by actual netlist connectivity."""
     logical=re.sub(r'\n\+\s*',' ',netlist)
     devices={f[0].upper():f for line in logical.splitlines() if (f:=line.split()) and f[0].upper().startswith('XM')}
@@ -141,6 +221,9 @@ def generate(results, language='en'):
     if s.get('error'):p(s['error'])
     p(tr('DC must pass for every transistor before AC measurements are allowed. Missing AC values below are not zeros or passing results.','只有全部晶体管通过 DC 检查才允许进行 AC 测量。下列未测量的 AC 指标不是零，也不代表达标。'))
     table([[tr('Metric','指标'),tr('Target','目标'),tr('Final value (SI units)','最终值（国际单位制）'),tr('Result','判定')]]+[[k,str(v),fmt(m['metrics'].get(k)),missing if m['checks'].get(k) is None else tr('PASS','达标') if m['checks'][k] else tr('FAIL','未达标')] for k,v in target['targets'].items()],[110,100,155,115])
+    if target.get('ac_validation'):
+        p(tr('AC convention: A=V(out)/(V(vinp)-V(vinn)); L=-A; gain=20log10|A| at 1 Hz; PM=180+continuous phase(L) at the first falling unity-gain crossing. This is a unity-feedback estimate; feedback is applied to VINP.', 'AC 定义：A=V(out)/(V(vinp)-V(vinn))，L=-A；增益为 1 Hz 的 20log10|A|，相位裕度为第一次向下穿越单位增益处的 180°+L 的连续相位。这是反馈接 VINP 的单位反馈估算。'))
+        p(tr('Low-frequency polarity check: ', '低频极性检查：')+str(m.get('ac_polarity',{})))
     p(tr('Conditions: ','仿真条件：')+json.dumps(target['conditions'])+'; '+target['corner'])
     stats=[['Status / 状态',s['status']],['Workflow completed / 流程完成',s.get('workflow_completed',False)],['Design success rate / 设计成功率','1/1 (100%)' if s['status']=='targets_passed' else '0/1 (0%)'],['All iterations / 总迭代',s['iteration_count']],['DC repair iterations / DC 修复次数',s.get('dc_iteration_count','N/A')],['Performance iterations / 性能优化次数',s.get('performance_iteration_count','N/A')],['ngspice simulations / 仿真调用次数',s['simulation_count']],['Prompt tokens / 输入 token',s['tokens']['prompt_tokens']],['Completion tokens / 输出 token',s['tokens']['completion_tokens']],['Total tokens / 总 token',s['tokens']['total_tokens']],['Usage complete / 统计完整',s['token_usage_complete']],['Time / 总耗时',f"{s['total_optimization_time_seconds']:.3f} s ({s['total_optimization_time_seconds']/60:.2f} min)"]]
     table([[tr('Statistic','统计项'),tr('Value','记录值')]]+[[name.split(' / ')[1 if language=='zh' else 0],value] for name,value in stats],[240,240])
@@ -153,6 +236,8 @@ def generate(results, language='en'):
         for element in drawing.contents:
             if isinstance(element,String) and element.text in captions:element.text=captions[element.text];element.fontName='ReportCJK'
     story.append(drawing)
+    if 'N_STAGE2_BIAS' in parameters(net):
+        p(tr('M7: PMOS common-source gain device driven by N2. M6: NMOS current sink sharing VBIAS_N with M5 and MBIAS_N.', 'M7 为 N2 驱动的 PMOS 共源增益管；M6 为 NMOS 电流源，与 M5、MBIAS_N 共用 VBIAS_N。'))
     p(tr('Sources and passive components','电源、偏置源和无源器件'),heading)
     story.append(Preformatted('\n'.join(l for l in net.splitlines() if re.match(r'^(?:V\w+|I\w+|C\w+)\s',l)),code))
     story.append(PageBreak());p(tr('DC acceptance and final sizing','DC 检查与最终尺寸'),title)
@@ -164,7 +249,7 @@ def generate(results, language='en'):
         p(tr('Failed devices: ','未通过器件：')+', '.join(dc['failed_devices']))
     initial=parameters(reference);final=parameters(net)
     table([[tr('Parameter','参数'),tr('Initial','初始'),tr('Final','最终')]]+[[k,initial[k],final[k]] for k in target['optimization']['allowed_parameters']],[240,120,120])
-    p(tr('W/L: micrometers; IBIAS: amperes; CC: farads. M3/M4 have identical W/L. N_TAIL and N_STAGE2_LOAD are dimensionless positive integers.','W/L 单位为微米，IBIAS 为安培，CC 为法拉。M3/M4 的 W/L 完全一致；N_TAIL、N_STAGE2_LOAD 是无量纲正整数。'))
+    p(tr('W/L: micrometers; IBIAS: amperes; CC: farads. M3/M4 have identical W/L. Integer ratios: ', 'W/L 单位为微米，IBIAS 为安培，CC 为法拉。M3/M4 的 W/L 完全一致。整数倍率参数：')+', '.join(target['optimization'].get('integer_parameters',[])))
     story.append(PageBreak());p(tr('Iteration history','迭代历史'),title)
     if not history:p(tr('No sizing decision completed.','没有完成尺寸决策。'))
     for row in history:

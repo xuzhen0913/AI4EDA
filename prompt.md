@@ -1,5 +1,10 @@
 # SKY130 Two-Stage Op-Amp — Qwen Automated Sizing
 
+> 2026-10-07 拓扑更新：以当前 reference.spice 与 target.json 为准。电路共 8 个 MOS，
+> M7 是 PMOS 第二级增益管，M6 是 NMOS 偏置电流源，与 M5 共用 MBIAS_N。
+> 已删除独立 PMOS 偏置支路；DC 修复累计最多 5 次、总决策最多 10 次。
+> 本次仅构建与静态检查，未运行模型或仿真。最新运行入口和约定见中英文 README。
+
 ## 1. 当前任务
 
 本次只实现：
@@ -836,8 +841,8 @@ candidate.spice
 - M1/M2 differential pair
 - M3/M4 current mirror
 - M5 tail source
-- M6 second gain stage
-- M7 second-stage load
+- M6 NMOS second-stage bias current sink (gate = vbias_n)
+- M7 PMOS second-stage common-source gain device (gate = n2)
 - bias circuit
 - Miller compensation capacitor
 - load capacitor

@@ -61,12 +61,29 @@ def parse_log(text, returncode, target, mode='full'):
     warnings = [l for l in text.splitlines() if 'warning' in l.lower()]
     required = metrics.values() if mode=='full' else [values.get('power_w')]+list(diagnostics.values())
     valid = returncode == 0 and not issues and bool(diagnostics) and all(v is not None and math.isfinite(v) for v in required)
+    # Sign normalization is valid only when the expected low-frequency loop polarity holds.
+    ac_policy=target.get('ac_validation',{})
+    polarity=values.get(ac_policy.get('measurement','loop_real_lf'))
+    polarity_ok=None
+    if mode=='full' and ac_policy.get('require_positive_loop_real_lf'):
+        polarity_ok=polarity is not None and math.isfinite(polarity) and polarity>0
+        if not polarity_ok:
+            issues.append('Invalid or missing normalized low-frequency loop polarity')
+            valid=False
     dc=dc_check(diagnostics,target)
-    dc['passed']=valid and dc['passed']
+    # AC measurement/polarity errors must not relabel a passing DC operating point.
+    dc_text=text.split('END_DC_OPERATING_POINT',1)[0]
+    dc_errors=bool(re.search(r'error|failed|singular matrix|timestep too small|\bnan\b|\binf\b',dc_text,re.I))
+    power=values.get('power_w')
+    dc_numerical_valid=(returncode==0 and not dc_errors and bool(diagnostics)
+        and power is not None and math.isfinite(power)
+        and all(math.isfinite(v) for v in diagnostics.values()))
+    dc['passed']=dc_numerical_valid and dc['passed']
     checks = {k: (None if v is None else all(v >= limit if op=='min' else v <= limit
         for op,limit in target['targets'][k].items())) for k,v in metrics.items()}
     return {'analysis_mode':mode,'metrics':metrics,'dc_operating_point':diagnostics,'simulation_valid':valid,
-            'dc_acceptance':dc,'dc_passed':dc['passed'],
+            'dc_acceptance':dc,'dc_passed':dc['passed'],'dc_numerical_valid':dc_numerical_valid,
+            'ac_polarity':{'loop_real_lf':polarity,'passed':polarity_ok},
             'warnings':warnings,'errors':issues,'return_code':returncode,'checks':checks,
             'all_targets_passed':mode=='full' and valid and dc['passed'] and all(checks.values())}
 
