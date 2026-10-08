@@ -3,7 +3,9 @@ import math
 import re
 from pathlib import Path
 import os
-from analog_agents.client import LocalClient, ClaudeCliClient
+from analog_agents.client import LocalClient, ClaudeCliClient, CodexCliClient
+from analog_agents.models import resolve
+from analog_agents.analog_calc import derive
 
 
 def obj(properties):
@@ -109,15 +111,20 @@ def apply_changes(reference, candidate, target, changes):
 
 class SizingAgent:
     def __init__(self, config):
-        backend=os.environ.get('SIZING_BACKEND')
-        if backend not in ('qwen','claude'):
-            raise RuntimeError("SIZING_BACKEND must be set to 'qwen' or 'claude', e.g. SIZING_BACKEND=claude bash scripts/run_all.sh")
-        self.client=ClaudeCliClient(config) if backend=='claude' else LocalClient(config)
+        self.kind,self.alias,self.model_id=resolve()
+        self.client={'claude':lambda:ClaudeCliClient(config,self.model_id),
+                     'codex':lambda:CodexCliClient(config,self.model_id),
+                     'qwen':lambda:LocalClient(config)}[self.kind]()
         self.prompt=Path(__file__).with_name('prompt.md').read_text()
 
     def run(self, target, reference, candidate, full_log, measurements, history):
+        current=parameters(candidate)
+        try:
+            derived=derive(target,current,measurements,number)
+        except Exception as exc:  # arithmetic aid only; never block a sizing call
+            derived={'error':'derived calculations unavailable: '+str(exc)}
         return self.client.ask(self.prompt,dict(target=target,reference_spice=reference,
             candidate_spice=candidate,full_ngspice_log=full_log,measurements=measurements,
-            current_parameters=parameters(candidate),
+            current_parameters=current,derived_calculations=derived,
             last_rejection=history[-1].get('validation_error') if history else None,
             history=history),SCHEMA,agent_name='sizing')

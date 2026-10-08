@@ -1,52 +1,59 @@
 * ============================================================
 * SKY130 Two-Stage CMOS Operational Amplifier
-* Reference Netlist for Model-Based Constrained Sizing
-*
-* Fixed topology:
-*   M1/M2 : NMOS differential pair
-*   M3/M4 : PMOS current-mirror active load
-*   M5    : NMOS tail current source
-*   M6    : NMOS second-stage bias current source
-*   M7    : PMOS second-stage common-source gain device
-*
-* Process : SKY130
-* Corner  : TT
-* VDD     : 1.8 V
+* PMOS second gain stage with series R-C Miller compensation
+* M1/M2: NMOS differential pair; M3/M4: matched PMOS mirror
+* M5: NMOS tail; M6: NMOS bias sink; M7: PMOS gain device
+* MBIAS_N: diode-connected NMOS reference
+* Process: SKY130; corner: TT; supply: 1.8 V
 * ============================================================
 
-* SIZING CONTRACT FOR THIS CIRCUIT (not universal agent rules)
-* Only scalar values of the 12 parameters in OPTIMIZABLE PARAMETERS may change.
-* W_IN, W_LOAD, W_STAGE2, WBN0: 1..100 um (SPICE W/L values use um here).
-* L_IN, L_LOAD, L_STAGE2, L_BIAS_N: 0.15..2 um.
-* IBIAS: 1u..100u A. CC: 0.1p..10p F.
-* N_TAIL and N_STAGE2_BIAS: integers 1..20, independently chosen.
-* EFFECTIVE W of EVERY MOS, including N*WBN0, must remain 1..100 um.
-* These are screening bounds, not proof every W/L combination has a PDK bin.
-* Model lookup errors are failed simulations; never bypass them or edit models.
-* M1/M2 identical W and L; M3/M4 identical W and L (fixed 1:1).
-* MBIAS_N is diode-connected. MBIAS_N/M5/M6 share L and gate bias.
-* M5 width=N_TAIL*WBN0; M6 width=N_STAGE2_BIAS*WBN0.
-* Preserve all expressions and connections. No added/removed devices or fingers.
-* Fixed: VDD=1.8 V, VCM=0.9 V, CLOAD=2p F, temperature=27 C, TT corner.
-* DC acceptance applies to all 8 MOS in THIS amplifier: |Id|>=1n A,
-* VGS(NMOS)/VSG(PMOS)-|Vth|>=0; VDS(NMOS)/VSD(PMOS)-|VDSAT|>=0;
-* VDS/VSD must be positive. Use printed model diagnostics, not square-law guesses.
-* M6: VGS=VBIAS_N, VDS=OUT. M7: VSG=VDD-N2, VSD=VDD-OUT.
-* Raising N2 weakens M7. Both M6/M7 current balance and headroom matter.
-* Width changes can change model bins and Vth, so mirror scaling is not exact.
-* DC repair: at most 5 decisions cumulatively, within 10 total decisions.
-* Check DC after EVERY decision. Run AC only for a passing DC candidate.
-* Required performance: gain>=60 dB, UGB>=10 MHz, PM>=60 deg, power<=500u W.
-* Gain=20log10|OUT/(VINP-VINN)| at 1 Hz; loop L=-OUT/(VINP-VINN).
-* Require real(L)>0 at 1 Hz. UGB: first falling 0 dB crossing.
-* PM=180+continuous_phase(L)*180/pi at UGB, unity feedback to VINP only.
-* Power=-I(VSUPPLY)*V(vdd), including the single NMOS reference branch.
-* Missing/nonfinite diagnostics or simulator errors cannot establish success.
-* target.json encodes these bounds/acceptance checks for deterministic validation.
-* If that file conflicts with this contract, stop and report the conflict.
+
+* ============================================================
+* Hard constraints and model definitions
+* ============================================================
+
+* Allowed scalars: W_IN,L_IN,W_LOAD,L_LOAD,W_STAGE2,L_STAGE2,WBN0,L_BIAS_N,
+* IBIAS,CC,N_TAIL,N_STAGE2_BIAS,L_RZ,W_RZ. Preserve topology and models.
+* MOS base/effective widths 1..100 um; MOS lengths 0.15..2 um.
+* IBIAS 1u..100u A; CC 0.1p..10p F; mirror ratios integers 1..20.
+* M1/M2 share W_IN,L_IN; M3/M4 share W_LOAD,L_LOAD, fixed 1:1.
+* MBIAS_N/M5/M6 share L_BIAS_N; Wref=WBN0; W5=N_TAIL*WBN0;
+* W6=N_STAGE2_BIAS*WBN0. Shared expressions cannot be independently edited.
+* L_RZ 0.5..100 um; W_RZ 0.5..10 um; RSH_RZ fixed at 100 ohm/square.
+* RCOMP uses the fixed expression RSH_RZ*L_RZ/W_RZ (ohm); initial 1000 ohm.
+* This is an ideal geometry-parameterized resistor, NOT a SKY130 physical
+* resistor model or a calibrated sheet resistance. No layout/parasitics included.
+* Fixed VDD=1.8V, VCM=0.9V, CLOAD=2pF, TT, 27C.
+* Numeric acceptance, iteration limits and targets are supplied in target.json.
+* Measurements use differential A=OUT/(VINP-VINN), loop L=-A, feedback to VINP.
+* The testbench below defines the measured quantities.
+*
+
+* ============================================================
+* TOPOLOGY-SPECIFIC NOTES (this circuit only; ngspice sweeps, SKY130 TT, estimates)
+* ============================================================
+* [DC] XM7 VSG = XM3 VSG (~1.07 V) regardless of W_STAGE2/L_STAGE2; I(XM7)=I(XM6)=Is forced.
+* Rm=[(W_STAGE2/L_STAGE2)/(W_LOAD/L_LOAD)]*(Ia/Is); Ia/Is ~ 0.44*N_TAIL/N_STAGE2_BIAS, independent of IBIAS.
+* out near VDD (~1.7 V), XM7 VSD<0.12 V: W/L too LARGE -> reduce it. out near 0 and XM6 fails: too SMALL -> raise it.
+* IBIAS, CC, L_RZ, W_RZ, W_IN do not fix DC. Aim out ~0.9 V.
+* Balanced W_STAGE2/L_STAGE2 rises with L_STAGE2 (IBIAS 20u): L=0.5 -> W/L 44-52 passes (W~23), 60 fails;
+* L=0.7 -> 64 passes, 43 fails low, 86 fails high; L=1.0 -> ~70-90. Fix L_STAGE2 first, then trim W_STAGE2.
+* Near balance out moves ~0.1 V per 1 W/L (L=0.5). IBIAS 25u with W 45/L 0.7 passes. Passing DC gives 74-78 dB gain.
+* XM1/XM2 are weak/moderate inversion (Vov~20 mV, gm/Id~20): normal; W_IN barely raises gm1.
+* [PERF] After DC (W45 L0.7 IBIAS25u CC1p): gain 77.7 dB, UGB 25 MHz, PM 23.6, 133 uW; only PM fails.
+* Cause: RCOMP=100*L_RZ/W_RZ was ~1k < 1/gm7 (2.8-3.8k) -> RHP zero. Raising L_RZ and W_RZ together
+* (15/2 ... 60/10) kept RCOMP 600-900 ohm and PM stayed 23-33.
+* Verified: W_RZ=1, CC=1p: L_RZ 30/50/70/90 -> PM 40/54/65/70. L_RZ=70: CC 0.5p/1p/1.5p/2p -> PM 41/65/80/91,
+* UGB 39/29/24/21 MHz; all targets met. So after DC set RCOMP ~5-8k (W_RZ=1, L_RZ 50-80), CC 1-2p.
+* CC bound is 10p (not 2p). UGB~gm1/(2*pi*CC). After targets pass, stop/trim, keep PM>=65, UGB>=15 MHz.
+* If PM<60 with RCOMP>1/gm7: raise gm7 (N_STAGE2_BIAS and W_STAGE2 together, then retrim out) or raise CC.
+* P~1.8*(IBIAS+I(XM5)+I(XM6)); limit 500 uW. gain<60: check A1/A2; UGB<10M: lower CC or raise IBIAS/N_TAIL.
+*
+* ============================================================
+* Process model and temperature
+* ============================================================
 
 .lib "/home/xu/eda/sky130-sim/libs.tech/ngspice/sky130.lib.spice" tt
-
 .temp 27
 
 
@@ -60,47 +67,36 @@
 
 
 * ============================================================
-* OPTIMIZABLE PARAMETERS
-*
-* Matching is enforced structurally by shared parameters.
-*
-* M1 = M2
-* L_M3 = L_M4; W_M4 = W_M3
-*
-* The sizing agent must modify these parameters only.
+* Optimizable parameters
 * ============================================================
 
-* Differential input pair: M1 = M2
 .param W_IN=10
 .param L_IN=0.5
 
-* PMOS current mirror: L_M3 = L_M4 = L_LOAD; W_M4 = W_M3 = W_LOAD
+* Matched PMOS mirror dimensions
 .param W_LOAD=10
 .param L_LOAD=0.5
 
-* NMOS bias reference / current mirrors: MBIAS_N, M5, M6
-* M5 and M6 share L_BIAS_N with MBIAS_N.
-* Their widths are independent positive-integer multiples of WBN0.
+* NMOS bias-reference dimensions
 .param WBN0=10
 .param L_BIAS_N=1.0
 
-* Second-stage PMOS common-source gain device: M7
+* PMOS second-stage dimensions
 .param W_STAGE2=30
 .param L_STAGE2=0.5
 
 * Reference bias current
 .param IBIAS=20u
 
-* Miller compensation
+* Miller compensation capacitor
 .param CC=1p
 
-* HARD STRUCTURAL MATCHING: ratios must be positive integers.
-* M1/M2: identical W_IN and L_IN.
-* M3/M4: shared L_LOAD and W_LOAD, M3 diode-connected.
-* MBIAS_N/M5/M6: shared L_BIAS_N.
-* W5=N_TAIL*WBN0 and W6=N_STAGE2_BIAS*WBN0.
-* N_TAIL and N_STAGE2_BIAS must be positive integers, but may differ.
-* Python rejects fractional N and effective device widths outside target bounds.
+* Series resistor: fixed sheet value and adjustable geometry
+.param RSH_RZ=100
+.param L_RZ=10
+.param W_RZ=1
+
+* Integer mirror width ratios
 .param N_TAIL=1
 .param N_STAGE2_BIAS=1
 
@@ -113,10 +109,7 @@ VSUPPLY vdd 0 {VDD}
 
 
 * ============================================================
-* Differential AC input
-*
-* Common-mode = 0.9 V
-* Differential AC amplitude = 1 V
+* Differential input sources
 * ============================================================
 
 VINP vinp 0 DC {VCM} AC 0.5
@@ -128,87 +121,72 @@ VINN vinn 0 DC {VCM} AC -0.5
 * ============================================================
 
 IBIAS_N vdd vbias_n {IBIAS}
-
 XMBIAS_N vbias_n vbias_n 0 0 sky130_fd_pr__nfet_01v8
 + W={WBN0} L={L_BIAS_N}
 
 
 * ============================================================
-* First Stage
+* First stage: matched NMOS input pair
 * ============================================================
-
-* Matched NMOS differential pair
 
 XM1 n1 vinp ntail 0 sky130_fd_pr__nfet_01v8
 + W={W_IN} L={L_IN}
-
 XM2 n2 vinn ntail 0 sky130_fd_pr__nfet_01v8
 + W={W_IN} L={L_IN}
 
-
-* Matched PMOS current mirror active load
-
+* First-stage matched PMOS current mirror
 XM3 n1 n1 vdd vdd sky130_fd_pr__pfet_01v8
 + W={W_LOAD} L={L_LOAD}
-
 XM4 n2 n1 vdd vdd sky130_fd_pr__pfet_01v8
 + W={W_LOAD} L={L_LOAD}
 
-
 * Tail current source
-
 XM5 ntail vbias_n 0 0 sky130_fd_pr__nfet_01v8
 + W={N_TAIL*WBN0} L={L_BIAS_N}
 
 
 * ============================================================
-* Second Stage
+* Second stage
 * ============================================================
-
-* NMOS bias current source.
-* Gate shares vbias_n with M5 and MBIAS_N.
-* L6 = L5 = L_MBIAS_N = L_BIAS_N.
-* W6 is an independent positive-integer multiple of WBN0.
 
 XM6 out vbias_n 0 0 sky130_fd_pr__nfet_01v8
 + W={N_STAGE2_BIAS*WBN0} L={L_BIAS_N}
 
-
-* PMOS common-source gain device.
-* Gate is driven by the first-stage output n2.
-
+* PMOS common-source gain device
 XM7 out n2 vdd vdd sky130_fd_pr__pfet_01v8
 + W={W_STAGE2} L={L_STAGE2}
 
 
 * ============================================================
-* Frequency Compensation
+* Frequency compensation: n2 -- CCOMP -- ncomp -- RCOMP -- out
 * ============================================================
 
-CCOMP n2 out {CC}
+CCOMP n2 ncomp {CC}
+RCOMP ncomp out {RSH_RZ*L_RZ/W_RZ}
 
 
 * ============================================================
-* Output Load
+* Output load
 * ============================================================
 
 CLOAD_OUT out 0 {CLOAD}
 
 
-* DC-first testbench. Runner removes the marked AC block for DC-only checks.
-* M7 is PMOS common-source; output still inverts VINP-VINN.
-* A_diff = V(out)/(V(vinp)-V(vinn)); unity negative-feedback loop gain = -A_diff.
-* PM is an open-loop unity-feedback estimate with feedback applied to VINP.
+* ============================================================
+* Analysis and operating-point diagnostics
+* ============================================================
+
 .control
 set noaskquit
 set numdgt=10
 op
 echo DC_OPERATING_POINT
 print v(vdd) v(vinp) v(vinn) v(vbias_n)
-print v(ntail) v(n1) v(n2) v(out) i(VSUPPLY)
+print v(ntail) v(n1) v(n2) v(ncomp) v(out) i(VSUPPLY)
 let supply_current_a = -i(VSUPPLY)
 let power_w = -i(VSUPPLY)*v(vdd)
 print supply_current_a power_w
+
 echo DEVICE_xm1
 print @m.xm1.msky130_fd_pr__nfet_01v8[id]
 print @m.xm1.msky130_fd_pr__nfet_01v8[gm]
@@ -217,6 +195,7 @@ print @m.xm1.msky130_fd_pr__nfet_01v8[vgs]
 print @m.xm1.msky130_fd_pr__nfet_01v8[vds]
 print @m.xm1.msky130_fd_pr__nfet_01v8[vth]
 print @m.xm1.msky130_fd_pr__nfet_01v8[vdsat]
+
 echo DEVICE_xm2
 print @m.xm2.msky130_fd_pr__nfet_01v8[id]
 print @m.xm2.msky130_fd_pr__nfet_01v8[gm]
@@ -225,6 +204,7 @@ print @m.xm2.msky130_fd_pr__nfet_01v8[vgs]
 print @m.xm2.msky130_fd_pr__nfet_01v8[vds]
 print @m.xm2.msky130_fd_pr__nfet_01v8[vth]
 print @m.xm2.msky130_fd_pr__nfet_01v8[vdsat]
+
 echo DEVICE_xm3
 print @m.xm3.msky130_fd_pr__pfet_01v8[id]
 print @m.xm3.msky130_fd_pr__pfet_01v8[gm]
@@ -233,6 +213,7 @@ print @m.xm3.msky130_fd_pr__pfet_01v8[vgs]
 print @m.xm3.msky130_fd_pr__pfet_01v8[vds]
 print @m.xm3.msky130_fd_pr__pfet_01v8[vth]
 print @m.xm3.msky130_fd_pr__pfet_01v8[vdsat]
+
 echo DEVICE_xm4
 print @m.xm4.msky130_fd_pr__pfet_01v8[id]
 print @m.xm4.msky130_fd_pr__pfet_01v8[gm]
@@ -241,6 +222,7 @@ print @m.xm4.msky130_fd_pr__pfet_01v8[vgs]
 print @m.xm4.msky130_fd_pr__pfet_01v8[vds]
 print @m.xm4.msky130_fd_pr__pfet_01v8[vth]
 print @m.xm4.msky130_fd_pr__pfet_01v8[vdsat]
+
 echo DEVICE_xm5
 print @m.xm5.msky130_fd_pr__nfet_01v8[id]
 print @m.xm5.msky130_fd_pr__nfet_01v8[gm]
@@ -249,6 +231,7 @@ print @m.xm5.msky130_fd_pr__nfet_01v8[vgs]
 print @m.xm5.msky130_fd_pr__nfet_01v8[vds]
 print @m.xm5.msky130_fd_pr__nfet_01v8[vth]
 print @m.xm5.msky130_fd_pr__nfet_01v8[vdsat]
+
 echo DEVICE_xm6
 print @m.xm6.msky130_fd_pr__nfet_01v8[id]
 print @m.xm6.msky130_fd_pr__nfet_01v8[gm]
@@ -257,6 +240,7 @@ print @m.xm6.msky130_fd_pr__nfet_01v8[vgs]
 print @m.xm6.msky130_fd_pr__nfet_01v8[vds]
 print @m.xm6.msky130_fd_pr__nfet_01v8[vth]
 print @m.xm6.msky130_fd_pr__nfet_01v8[vdsat]
+
 echo DEVICE_xm7
 print @m.xm7.msky130_fd_pr__pfet_01v8[id]
 print @m.xm7.msky130_fd_pr__pfet_01v8[gm]
@@ -265,6 +249,7 @@ print @m.xm7.msky130_fd_pr__pfet_01v8[vgs]
 print @m.xm7.msky130_fd_pr__pfet_01v8[vds]
 print @m.xm7.msky130_fd_pr__pfet_01v8[vth]
 print @m.xm7.msky130_fd_pr__pfet_01v8[vdsat]
+
 echo DEVICE_xmbias_n
 print @m.xmbias_n.msky130_fd_pr__nfet_01v8[id]
 print @m.xmbias_n.msky130_fd_pr__nfet_01v8[gm]
@@ -274,6 +259,12 @@ print @m.xmbias_n.msky130_fd_pr__nfet_01v8[vds]
 print @m.xmbias_n.msky130_fd_pr__nfet_01v8[vth]
 print @m.xmbias_n.msky130_fd_pr__nfet_01v8[vdsat]
 echo END_DC_OPERATING_POINT
+
+
+* ============================================================
+* AC measurements
+* ============================================================
+
 * BEGIN_AC_ANALYSIS
 ac dec 100 1 1G
 let differential_input = v(vinp)-v(vinn)
@@ -289,6 +280,12 @@ meas ac phase_at_ugb FIND loop_phase_deg WHEN gain=0 FALL=1
 let phase_margin_deg = 180+phase_at_ugb
 print phase_margin_deg
 * END_AC_ANALYSIS
+
+
+* ============================================================
+* End of analysis
+* ============================================================
+
 quit
 .endc
 .end

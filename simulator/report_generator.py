@@ -6,8 +6,8 @@ from xml.sax.saxutils import escape
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, PageBreak, Preformatted
-from reportlab.graphics.shapes import Drawing, Line, String, Circle
-from agents.sizing_agent.agent import parameters
+from reportlab.graphics.shapes import Drawing, Line, String, Circle, Rect
+from agents.sizing_agent.agent import parameters, number
 
 
 def topology(netlist):
@@ -31,9 +31,13 @@ def pmos_topology(netlist):
         kind='pfet' if name in ('XM3','XM4','XM7') else 'nfet'
         if tuple(v.lower() for v in devices[name][1:5])!=nodes or devices[name][5]!='sky130_fd_pr__'+kind+'_01v8':
             raise ValueError('Schematic/netlist mismatch: '+name)
-    elements={f[0].upper():f for line in logical.splitlines() if (f:=line.split()) and f[0][0].upper() in 'CIV'}
+    elements={f[0].upper():f for line in logical.splitlines() if (f:=line.split()) and f[0][0].upper() in 'RCIV'}
     expected_elements={'CCOMP':('n2','out'),'CLOAD_OUT':('out','0'),'IBIAS_N':('vdd','vbias_n'),
                        'VSUPPLY':('vdd','0'),'VINP':('vinp','0'),'VINN':('vinn','0')}
+    series_resistor='RCOMP' in elements
+    if series_resistor:
+        expected_elements['CCOMP']=('n2','ncomp')
+        expected_elements['RCOMP']=('ncomp','out')
     if set(elements)!=set(expected_elements):raise ValueError('Unexpected source/passive set')
     for name,nodes in expected_elements.items():
         if tuple(elements[name][1:3])!=nodes:raise ValueError('Unexpected source/passive wiring: '+name)
@@ -76,7 +80,13 @@ def pmos_topology(netlist):
     # N2 goes to the PMOS gate, not the NMOS gate.
     wire((250,280),(340,280),(340,350),(405,350));dot(250,280);label(254,288,'N2')
     label(356,364,'PMOS gain',7);label(356,194,'NMOS bias',7)
-    wire((250,305),(282,305));wire((288,305),(430,305));dot(250,305);dot(430,305)
+    wire((250,305),(282,305));dot(250,305);dot(430,305)
+    if series_resistor:
+        wire((288,305),(363,305));wire((393,305),(430,305))
+        d.add(Rect(363,300,30,10,strokeColor=ink,fillColor=colors.white,strokeWidth=1.1))
+        label(348,320,'Rz='+format(number(values['RSH_RZ'])*number(values['L_RZ'])/number(values['W_RZ']),'.4g')+' ohm',7)
+        label(299,292,'NCOMP',7)
+    else:wire((288,305),(430,305))
     wire((282,296),(282,314));wire((288,296),(288,314));label(259,320,'CC = '+values['CC']+'F',7)
     wire((430,240),(480,240));dot(430,240);label(442,253,'OUT',10)
     wire((475,240),(475,155));wire((465,155),(485,155));wire((465,149),(485,149));wire((475,149),(475,60));dot(475,240)
@@ -238,8 +248,14 @@ def generate(results, language='en'):
     story.append(drawing)
     if 'N_STAGE2_BIAS' in parameters(net):
         p(tr('M7: PMOS common-source gain device driven by N2. M6: NMOS current sink sharing VBIAS_N with M5 and MBIAS_N.', 'M7 为 N2 驱动的 PMOS 共源增益管；M6 为 NMOS 电流源，与 M5、MBIAS_N 共用 VBIAS_N。'))
+    if 'RSH_RZ' in parameters(net):
+        vals=parameters(net)
+        rz=number(vals['RSH_RZ'])*number(vals['L_RZ'])/number(vals['W_RZ'])
+        p(tr('Series compensation resistor: ', '串联补偿电阻：')+f'{rz:.7g} ohm. '+tr(
+            'R=RSH_RZ*L_RZ/W_RZ; ideal geometry model, not a calibrated SKY130 physical resistor.',
+            'R=RSH_RZ*L_RZ/W_RZ；理想几何参数模型，非经过校准的 SKY130 实体电阻。'))
     p(tr('Sources and passive components','电源、偏置源和无源器件'),heading)
-    story.append(Preformatted('\n'.join(l for l in net.splitlines() if re.match(r'^(?:V\w+|I\w+|C\w+)\s',l)),code))
+    story.append(Preformatted('\n'.join(l for l in net.splitlines() if re.match(r'^(?:V\w+|I\w+|C\w+|R\w+)\s',l)),code))
     story.append(PageBreak());p(tr('DC acceptance and final sizing','DC 检查与最终尺寸'),title)
     dc=m.get('dc_acceptance')
     if dc:

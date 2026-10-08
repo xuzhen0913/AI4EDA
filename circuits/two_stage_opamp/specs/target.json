@@ -36,7 +36,9 @@
       "IBIAS",
       "CC",
       "N_TAIL",
-      "N_STAGE2_BIAS"
+      "N_STAGE2_BIAS",
+      "L_RZ",
+      "W_RZ"
     ],
     "parameter_bounds": {
       "W_IN": {
@@ -86,6 +88,14 @@
       "N_STAGE2_BIAS": {
         "min": 1,
         "max": 20
+      },
+      "L_RZ": {
+        "min_um": 0.5,
+        "max_um": 100
+      },
+      "W_RZ": {
+        "min_um": 0.5,
+        "max_um": 10
       }
     },
     "matching_constraints": [
@@ -315,7 +325,10 @@
     "second_stage_gain_device": "XM7",
     "second_stage_bias_device": "XM6",
     "bias_reference_device": "XMBIAS_N",
-    "description": "NMOS differential input, matched PMOS mirror, PMOS common-source second stage with NMOS bias sink"
+    "description": "NMOS differential input, matched PMOS mirror, PMOS common-source second stage with NMOS bias sink",
+    "mirror_reference_device": "XM3",
+    "input_pair_device": "XM1",
+    "tail_device": "XM5"
   },
   "ac_validation": {
     "require_positive_loop_real_lf": true,
@@ -331,5 +344,26 @@
     "VDD": "vdd_v",
     "VCM": "input_common_mode_v",
     "CLOAD": "load_capacitance_f"
+  },
+  "passive_components": {
+    "RCOMP": {
+      "type": "ideal_geometry_resistor",
+      "nodes": [
+        "ncomp",
+        "out"
+      ],
+      "resistance_expression": "RSH_RZ*L_RZ/W_RZ",
+      "fixed_sheet_resistance_ohm_per_square": 100,
+      "geometry_units": "um",
+      "calibrated_pdk_model": false
+    },
+    "CCOMP": {
+      "type": "capacitor",
+      "nodes": [
+        "n2",
+        "ncomp"
+      ],
+      "value_parameter": "CC"
+    }
   }
 }

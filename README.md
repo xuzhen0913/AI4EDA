@@ -1,188 +1,103 @@
-# 通用固定拓扑 Sizing Agent（附 SKY130 运放示例）
-
-**一句命令完成：选择空闲 GPU → 启动本地 Qwen → DC 检查与尺寸迭代 → 性能仿真 → 生成中英文 PDF → 关闭本次服务。**
-
-```bash
-SIZING_BACKEND=qwen bash /home/xu/Multi-agent/scripts/run_all.sh   # or SIZING_BACKEND=claude
-```
-
-## 选择模型后端（必须指定）
-
-运行时必须在命令前指定 `SIZING_BACKEND`，否则程序拒绝启动（`--baseline-only` 不调用模型，无需指定）。
-
-```bash
-# 本地 Qwen（需要空闲 GPU，自动启动并关闭服务）
-SIZING_BACKEND=qwen bash /home/xu/Multi-agent/scripts/run_all.sh
-
-# Claude Sonnet（通过 Claude Code CLI，不需要 GPU；GPU 繁忙时使用）
-SIZING_BACKEND=claude bash /home/xu/Multi-agent/scripts/run_all.sh
-```
+# 固定拓扑 Sizing Agent（SKY130 两级运放示例）
 
 [English README](README_EN.md)
 
-**本次已完成 33 项自动测试，并使用 Astra + 真实 ngspice 验证更新后的 agent。** 运行报告见下方本次验证结果。
+给定一个已选定的拓扑，让大模型迭代调整 `.param` 尺寸，由真实 ngspice 验证：先 DC 工作点修复，再性能优化（增益、UGB、相位裕度、功耗），最后生成中英文 PDF 报告。
 
-## 通用 sizing agent 与电路适配层
+## 一行命令：选择模型
 
-当前 sizing agent 接受已经选定的拓扑，不负责选择拓扑或分配模块指标。
-你规划的流程是：顶层拓扑 → 模块指标分配 agent → 模块拓扑选择 agent → sizing agent。
-本次只实现并验证最后一层的通用化，前两类 agent 尚未实现。
+用 `SIZING_MODEL` 选模型（或给脚本加 `--model`），**必须指定**，否则程序拒绝启动。
 
-- `agents/sizing_agent/prompt.md`：通用工作规则。要求读取 reference 中的约束，不预设两级运放、工艺、管子数量、极性或性能公式。
-- `agents/sizing_agent/agent.py`：通用参数提案与校验。除允许的 `.param` 数值外，网表文本必须保持不变；范围、整数、匹配和乘积尺寸限制来自输入数据。
-- `reference.spice`：该拓扑的连接、共享参数表达式、固定条件、可调范围、工作区要求和测量定义。新增 `SIZING CONTRACT` 注释完整描述当前示例约束。
-- `target.json`：输入性能 specs，以及 Python 可执行的同一套约束。`condition_parameters` 显式绑定条件与参数；可选 MOS 验收项用 `model` 和 `diagnostic_prefix` 指定真实模型和日志路径，不再由 agent 拼接 SKY130 名称。
-
-reference 的自然语言约束由模型阅读，Python 不会自动把任意自然语言转换成校验程序。因此新增电路时，必须同步填写对应结构化约束；不要只改注释或只改 target。共享表达式与禁止改拓扑仍由 Python 强制保护。
-
-上层 agent 可调用 `SizingAgent.run(target, reference, candidate, full_log, measurements, history)`。
-返回值仍是 `analysis` 和至多三个 `changes`；由 `apply_changes` 校验再交给仿真器。
-可优化参数目前要求一行一个 `.param NAME=标量`；固定表达式可引用这些标量。边界允许负值或零，因此不再隐含所有参数都是正的晶体管尺寸。
-
-**通用 sizing 不等于任意电路的仿真/报告已自动适配。** 当前命令行入口仍运行 `circuits/two_stage_opamp` 示例；ngspice 执行器仍使用当前 SKY130 工具配置、DC→AC 测量协议与 MOS 饱和验收器，报告绘图仍支持现有运放拓扑。接入电阻网络、比较器、振荡器等模块时，应提供对应的仿真/工作区验收/测量和绘图适配，不能沿用运放的饱和判据、PM 公式或测量脚本。sizing agent 本身无需再添加这些电路专属规则。
-
-标准一行命令继续使用 Qwen；GPU 忙时会退出，不会抢占别人的进程，也不会自动连接 Astra。本次 Astra 替代由 Codex 会话提供，结果独立保存，不修改 Qwen 的长期配置。
-
-## 当前电路是什么
-
-实际输入为 `circuits/two_stage_opamp/reference/reference.spice`。
-
-- M1/M2：NMOS 差分输入对。
-- M3/M4：完全匹配的 PMOS 电流镜有源负载，固定 1:1。
-- M5：NMOS 尾电流源。
-- **M7：PMOS 共源增益管**，栅极接第一级输出 `n2`，源极和体端接 VDD，漏极接 OUT。
-- **M6：NMOS 偏置电流源**，栅极接 `vbias_n`，源极和体端接地，漏极接 OUT。
-- MBIAS_N：二极管连接的 NMOS 偏置参考，同时为 M5、M6 提供栅压。
-
-共 **8 个 MOS**。旧的 MBIAS_P、IBIAS_P 和 `vbias_p` 分支已删除。
-`W_STAGE2/L_STAGE2` 现在控制 M7，不再控制 M6。改变 `N_STAGE2_BIAS` 则调整 M6 相对偏置参考管的宽度倍率。
-
-## 参数与强制匹配
-
-| 器件 | W | L |
-|---|---|---|
-| M1、M2 | `W_IN` | `L_IN` |
-| M3、M4 | `W_LOAD` | `L_LOAD` |
-| MBIAS_N | `WBN0` | `L_BIAS_N` |
-| M5 | `N_TAIL*WBN0` | `L_BIAS_N` |
-| M6 | `N_STAGE2_BIAS*WBN0` | `L_BIAS_N` |
-| M7 | `W_STAGE2` | `L_STAGE2` |
-
-`N_TAIL` 与 `N_STAGE2_BIAS` 必须是正整数，可取不同值；当前初始值均为 1。
-W/L 以微米计。基础参数及乘积后的实际尺寸都受 `target.json` 限制：所有 MOS 的有效 W 上限均为 100 µm；这不能保证范围内每个 W/L 组合都存在模型分档。
-网表强制共享表达式，Python 拒绝小数倍率、越界值、旧值不匹配和改变器件连接的提案。
-旧参数 `N_STAGE2_LOAD`、`WBP0`、`L_BIAS_P` 不再允许优化；M3/M4 没有可调倍率。
-
-无效提案不会修改电路，会记录错误并反馈下一轮，但仍占用决策额度。下次启动会从新 reference 重新生成候选，不会继续使用旧拓扑的 `working/candidate.spice`。
-
-## DC 条件：必须按实际器件极性计算
-
-第一步仅运行 DC OP。Python 检查全部 8 个器件，包括偏置参考管；不能仅凭模型说“DC 正常”就放行。
-当前判据为：
-
-- 电流幅值 `|Id| >= 1 nA`；
-- NMOS 使用 `VGS=Vg−Vs`、`VDS=Vd−Vs`；PMOS 使用 `VSG=Vs−Vg`、`VSD=Vs−Vd`；
-- 漏源方向正确，即上述 VDS/VSD 为正；
-- `VGS/VSG−|Vth| >= 0`；
-- `VDS/VSD−|模型 VDSAT| >= 0`。
-
-这些阈值位于 `target.json → dc_acceptance`，属于本项目的强反型饱和验收规则。缺少诊断量、非有限值或 DC 仿真错误均不能通过。器件端子和 NFET/PFET 类型会与网表核对，避免使用旧的 DC 映射。
-
-对新的第二级，具体为：
-
-| 器件 | 导通条件 | 饱和／电压余量条件 |
-|---|---|---|
-| M6，NMOS 电流源 | `V(vbias_n)−|Vth6| >= 0` | `V(out)−|VDSAT6| >= 0` |
-| M7，PMOS 增益管 | `VDD−V(n2)−|Vth7| >= 0` | `VDD−V(out)−|VDSAT7| >= 0` |
-
-所以 OUT 过低可能使 M6 退出饱和，OUT 过高可能使 M7 退出饱和。提高 `n2` 会减小 M7 的 VSG、削弱 PMOS 导通，不能沿用 NMOS 增益管的栅压判断。
-M5、M6 共用偏置参考：修改 `WBN0` 或 `L_BIAS_N` 会影响整个 NMOS 偏置网络。
-
-## 增益、相位裕度与功耗的计算
-
-当前 AC 输入为 VINP=+0.5、VINN=−0.5，因此差分激励为 1 V。程序显式计算：
-
-```text
-Vin_diff = V(vinp) - V(vinn)
-A_diff   = V(out) / Vin_diff
-Gain_dB  = 20*log10(|A_diff|)
-L        = -A_diff
-PM       = 180° + continuous_phase(L) × 180/π，在 UGB 处取值
-Power    = -I(VSUPPLY) * V(vdd)
-```
-
-- `dc_gain_db` 是 **1 Hz 的低频增益近似**，不是独立 DC 扫描测出的增益。
-- UGB 是幅值第一次向下穿越 0 dB 的频率，扫描范围仍为 1 Hz–1 GHz。
-- PMOS 共源级仍然反相；按本参考的第一级连接，整体 `A_diff` 在低频仍为负，因此保留 `L=-A_diff`，不因更换 PMOS 就盲目翻转符号。
-- 运行时检查 1 Hz 的 `real(L)>0`。若极性不符、测量缺失或 AC 出错，不判定性能达标；AC 错误不会被当作已通过的 DC 工作点失败。
-- 此 PM 是**反馈接 VINP 的单位负反馈、开环小信号估算**。VINP/VINN 名称不等于传统运放正负输入功能；这不是任意反馈网络的回路增益测量，也不能单凭第一次交越证明多交越系统稳定。
-- `cph` 输出弧度，显式乘以 `180/π`。功耗仍取真实电源电流，已自然包含删除 PMOS 偏置支路后的变化，不使用旧支路数量估算。
-
-函数定义参考：[ngspice 官方手册](https://ngspice.sourceforge.io/docs/ngspice-manual.pdf)。上述新拓扑的极性推导和程序修改尚未经实际仿真验证。
-
-## 迭代和停止条件
-
-1. 检查网表、目标、匹配表达式和 DC 端子映射。
-2. 执行纯 DC；任何器件不通过，则 Qwen 根据完整日志修复偏置。
-3. 全部通过后，才允许同一份候选网表执行完整 OP+AC 与功耗测量。
-4. 每次尺寸决策后先重新检查 DC；性能优化导致 DC 失败时立即回到 DC 修复。
-5. 全部指标和 DC 条件达标后停止，或达到额度后停止并生成报告。
-
-**DC 修复累计最多 5 次，总决策累计最多 10 次。** 返回 DC 修复不会重置 5 次额度。
-第五次 DC 修复如果仍失败就停止；如果通过，可使用剩余总额度优化性能。
-基准不计入决策次数；无修改或被拒绝的决策仍占用次数。一次 DC 调用和一次完整 OP+AC 调用分别计一次仿真。
-DC 不通过时，AC 指标显示“未仿真”，不会沿用旧结果或填零。
-
-## 一键脚本和 GPU 管理
-
-脚本优先选择配置中的 GPU 3，忙时选择另一张空闲 GPU。当前空闲阈值：显存占用不超过 1024 MiB，利用率不超过 5%。无空闲 GPU 时退出，不挤掉其他进程；该检查不是集群资源预留。
-
-正常结束、异常或 Ctrl+C 后会尝试关闭本次启动的服务。已有本项目服务时，一键脚本拒绝再次启动；可先 `bash scripts/stop.sh`，或用 `bash scripts/run_demo.sh` 复用已有服务。SIGKILL 无法保证清理。
-
-## 文件入口和输出
-
-| 用途 | 文件 |
-|---|---|
-| 一句话全自动运行 | `scripts/run_all.sh` |
-| GPU 服务生命周期 | `scripts/run_all.py`、`scripts/service.py` |
-| DC／性能阶段切换 | `main.py` |
-| 参考网表 | `circuits/two_stage_opamp/reference/reference.spice` |
-| 指标、边界、倍率、DC 映射、AC 约定 | `circuits/two_stage_opamp/specs/target.json` |
-| 通用 sizing 规则及参数校验 | `agents/sizing_agent/prompt.md`、`agent.py` |
-| 仿真执行与结果解析 | `simulator/ngspice_runner.py` |
-| 双语报告、整体连线图 | `simulator/report_generator.py` |
-| 模型服务配置 | `config/settings.json` |
-
-报告：`circuits/two_stage_opamp/results/final_report.pdf` 和 `final_report_zh.pdf`。
-同目录保存候选快照、配置、历史、token、时间和完整仿真日志。原有结果仍属于旧电路；下次运行前会归档到 `results/runs/`，编号日志保留。
-图形生成器按网表区分新 PMOS 第二级与历史 NMOS 第二级，避免把旧报告重新画成新拓扑。
-
-Qwen 接口：`http://127.0.0.1:8003/v1`；服务名：`qwen3-8b-local`。
-权重在 `models/Qwen3-8B`；Python 在 `/home/xu/.venv`；EDA 路径由 `tools_path.md` 指定。
-每轮发送完整最新日志、参考与候选网表、目标、测量值和历史。超上下文窗口时明确停止，不截断日志。
-
-## 后续可选检查（本次未执行）
-
-仅 CPU 基准与报告，同样受 DC 放行规则约束：
-
-```bash
-bash /home/xu/Multi-agent/scripts/run_all.sh --baseline-only
-```
-
-回归测试：
+| 模型名 | 后端 | 实际模型 ID | 备注 |
+|---|---|---|---|
+| `qwen` | 本地 GPU | Qwen3-8B | 自动选空闲 GPU、启动服务、结束后关闭 |
+| `fable` | Claude Code | claude-fable-5-1 | |
+| `sonnet` | Claude Code | claude-sonnet-5-5 | |
+| `opus` | Claude Code | claude-opus-5-5 | |
+| `astra` | Codex | gpt-6-astra | |
+| `sol` | Codex | gpt-6-sol | |
+| `luna` | Codex | gpt-6-luna | |
 
 ```bash
 cd /home/xu/Multi-agent
-source scripts/env.sh
-"$PROJECT_PYTHON" -m pytest -q -p no:cacheprovider
+
+# 方式一：环境变量
+SIZING_MODEL=qwen   bash scripts/run_all.sh
+SIZING_MODEL=sonnet bash scripts/run_all.sh
+SIZING_MODEL=opus   bash scripts/run_all.sh
+SIZING_MODEL=fable  bash scripts/run_all.sh
+SIZING_MODEL=astra  bash scripts/run_all.sh
+SIZING_MODEL=sol    bash scripts/run_all.sh
+SIZING_MODEL=luna   bash scripts/run_all.sh
+
+# 方式二：参数（等价）
+bash scripts/run_all.sh --model sol
+
+# 兼容旧写法：只指定后端，使用该后端默认模型（claude→sonnet，codex→astra，qwen→qwen）
+SIZING_BACKEND=codex bash scripts/run_all.sh
+
+# 不调用任何模型，只验证基线网表并出报告
+bash scripts/run_all.sh --baseline-only
 ```
 
-本次只更新了相关测试，未执行测试或仿真。静态检查不能保证电路收敛或性能达标。
+- 也可以直接写完整模型 ID：`SIZING_MODEL=gpt-6-sol`、`SIZING_MODEL=claude-opus-5-5`。
+- 模型名与 `SIZING_BACKEND` 冲突（如 `SIZING_MODEL=sol SIZING_BACKEND=claude`）会报错。
+- Claude 模型通过 Claude Code CLI 调用，使用本机 Claude Code 已登录的账号；Codex 模型通过 `codex exec` 调用，使用 VS Code 里 ChatGPT/Codex 扩展已登录的账号（`~/.codex/auth.json`），不读取你的 `config.toml`，也不会保存会话。云端模型不需要 GPU。
+- 找不到 CLI 时可手动指定：`CLAUDE_BIN=/path/to/claude`、`CODEX_BIN=/path/to/codex`（默认自动查找 PATH 与 VS Code 扩展目录）。
+- 某个模型账号额度用完会直接报错，例如 `claude CLI error (claude-fable-5-1): You're out of usage credits`，换一个模型名重跑即可。
+- 结果里 `summary.json` 的 `design_backend` 和 `model` 字段记录这次用的模型，PDF 也会写出。
+- 已运行的本地 Qwen 服务（`scripts/start.sh` 启动）可用 `SIZING_MODEL=qwen bash scripts/run_demo.sh` 复用，`stop.sh` 关闭；`run_demo.sh` 同样识别 `SIZING_MODEL`。
 
-## 本次验证结果（2026-10-07）
+## 每次迭代模型看到什么
 
-33 项测试通过，包括无 MOS 电阻网络及非 SKY130 模型的 sizing 校验。检测到 4 张 GPU 均忙，实际由 Astra 读取通用 prompt 和当前 reference 后完成决策，ngspice 真实仿真。3 次迭代（1 次 DC 修复、2 次性能优化）、7 次仿真调用，154.37 秒后全部目标达标：增益 69.7099 dB，UGB 11.6066 MHz，PM 72.0794°，功耗 234.639 µW，全部 8 个 MOS 通过 DC。成功率仅指本次运行 1/1，不能推断对任意电路的成功率。
+所有模型走同一个入口，输入完全一致：
 
-最终候选参数：W_STAGE2=100、N_STAGE2_BIAS=4、CC=2.5p；原 reference 初始参数保留。Astra token 用量不可获取，报告标记未知。
+1. `ANALOG_DESIGN_RULES.md`：通用公式、判据和通用诊断自检（每次调用重新读取，哈希记入 `calls.json`）。
+2. `reference.spice`：电路连接、硬约束，以及“本电路专用说明”（DC 平衡关系、补偿电阻等经 ngspice 扫描标定的数据）。
+3. `target.json`：规格、参数边界、DC 验收判据。
+4. 本轮实测（DC 工作点、性能、具体失败项）和本次运行的迭代历史（不含模型此前的说明文字）。
+5. `derived_calculations`：Python 预先算好的数值（各管 gm/Id、gm/gds，两级电流失配比 Rm 与目标 W/L，补偿电阻与零点位置，p2、UGB、A1/A2 估算，功耗余量）。由 `analog_agents/analog_calc.py` 生成，是估算，仿真实测优先。
 
-[中文报告](circuits/two_stage_opamp/results/astra_20261007_113433/final_report_zh.pdf) · [英文报告](circuits/two_stage_opamp/results/astra_20261007_113433/final_report.pdf) · [运行摘要](circuits/two_stage_opamp/results/astra_20261007_113433/summary.json)
+模型只返回 JSON：`analysis` 与至多 3 个 `changes`。提案由 `apply_changes` 校验（边界、整数、匹配、拓扑文本不变、old_value 一致），不合格则记录并反馈下一轮，但仍占一次迭代。
+
+## 流程与停止条件
+
+1. 基线 DC 检查（Python 判据，见 `target.json → dc_acceptance`：导通、过驱动、饱和裕量、方向）。
+2. DC 失败：进入 DC 修复，最多 `max_dc_iterations`（5）次；超出则以 `dc_iteration_limit` 结束。
+3. DC 通过：做 AC，进入性能优化，总迭代最多 `max_iterations`（10）。
+4. 全部指标满足即 `targets_passed`；否则 `max_iterations_reached`。
+
+## 输出
+
+结果在 `circuits/two_stage_opamp/results/`：`summary.json`（状态、迭代数、仿真数、耗时、token、模型）、`history.json`（每轮参数、测量、提案及接受/拒绝）、`calls.json`（每次模型调用的 token、规则哈希、原始响应）、`measurements.json`、`candidate.spice`、`logs/simulation_NNN.{spice,log,json}`、`final_report.pdf` 与 `final_report_zh.pdf`。每次运行前会把上一次归档到 `results/runs/`。
+
+## 文件说明
+
+| 路径 | 作用 |
+|---|---|
+| `scripts/run_all.sh` / `run_all.py` | 一行入口；解析模型；Qwen 时自动管理 GPU 服务 |
+| `analog_agents/models.py` | 模型注册表（别名 → 后端 + 模型 ID） |
+| `analog_agents/client.py` | `LocalClient`（Qwen）、`ClaudeCliClient`、`CodexCliClient` |
+| `analog_agents/rules.py`、`context.py` | 注入全局规则；压缩输入（去重、编码设备数据、突出失败项） |
+| `analog_agents/analog_calc.py` | 公式库与 `derive()`（预计算数值） |
+| `agents/sizing_agent/` | prompt、提案校验与应用 |
+| `simulator/` | ngspice 运行与解析、PDF 报告 |
+| `circuits/two_stage_opamp/` | reference 网表、`specs/target.json`、结果 |
+| `ANALOG_DESIGN_RULES.md` | 通用模拟电路公式与诊断规则（与拓扑无关） |
+| `main.py` | 优化主循环 |
+
+## 新增或修改模型
+
+在 `analog_agents/models.py` 的 `MODELS` 里加一行 `'别名': ('claude'|'codex', '模型ID')` 即可，无需改其他文件。新增 Codex 模型前可用 `~/.codex/models_cache.json` 查看账号可用的模型名。
+
+## 修改规则或电路说明
+
+- 与电路无关的公式、判据、通用建议 → `ANALOG_DESIGN_RULES.md`。
+- 与这个运放拓扑相关的数值、方向、标定数据 → `reference.spice` 头部的 `TOPOLOGY-SPECIFIC NOTES` 注释。
+- 新电路需同步填写 `target.json` 的结构化约束（边界、`device_dimensions`、`dc_acceptance`、`topology` 里的管子角色）；只改注释不会被 Python 强制。
+
+## 测试
+
+```bash
+/home/xu/.venv/bin/python -m pytest -q     # 55 项，不调用模型，不需要 GPU
+```
