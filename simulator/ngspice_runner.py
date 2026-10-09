@@ -6,9 +6,10 @@ import re
 import subprocess
 import time
 from pathlib import Path
+from analog_agents.spice import SCALAR as NUMBER
+from simulator.testbench import LOOP_POLARITY, deck
 
 ROOT = Path(__file__).resolve().parents[1]
-NUMBER = r'[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?'
 
 def save(path, data):
     path = Path(path)
@@ -55,7 +56,7 @@ def parse_log(text, returncode, target, mode='full'):
     values = {m[0].lower(): float(m[1]) for m in re.findall(
         rf'^\s*([^\s=]+)\s*=\s*({NUMBER})(?:\s|$)', text, re.M)}
     metrics = {key: values.get(key) for key in target['targets']}
-    diagnostics = {k:v for k,v in values.items() if k.startswith(('v(', 'i(', '@m.'))}
+    diagnostics = {k:v for k,v in values.items() if k.startswith(('v(', 'i(', '@'))}
     issues = [line for line in text.splitlines() if re.search(
         r'error|failed|singular matrix|timestep too small|\bnan\b|\binf\b',line,re.I)]
     warnings = [l for l in text.splitlines() if 'warning' in l.lower()]
@@ -63,7 +64,7 @@ def parse_log(text, returncode, target, mode='full'):
     valid = returncode == 0 and not issues and bool(diagnostics) and all(v is not None and math.isfinite(v) for v in required)
     # Sign normalization is valid only when the expected low-frequency loop polarity holds.
     ac_policy=target.get('ac_validation',{})
-    polarity=values.get(ac_policy.get('measurement','loop_real_lf'))
+    polarity=values.get(LOOP_POLARITY)
     polarity_ok=None
     if mode=='full' and ac_policy.get('require_positive_loop_real_lf'):
         polarity_ok=polarity is not None and math.isfinite(polarity) and polarity>0
@@ -88,15 +89,9 @@ def parse_log(text, returncode, target, mode='full'):
             'all_targets_passed':mode=='full' and valid and dc['passed'] and all(checks.values())}
 
 
-def simulation_source(source, mode):
-    if mode not in ('dc','full'):raise ValueError('Unknown analysis mode')
-    if mode=='dc':
-        pattern=r'\* BEGIN_AC_ANALYSIS.*?\* END_AC_ANALYSIS'
-        source,count=re.subn(pattern,'* AC skipped: DC-only saturation check.',source,flags=re.S)
-        if count!=1:raise ValueError('Exactly one marked AC block is required')
-    return source
-
 class NgspiceRunner:
+    """Runs the shared testbench around a candidate circuit; every simulation is archived under results/logs."""
+
     def __init__(self, results, target):
         self.results, self.target = Path(results), target
         (self.results/'logs').mkdir(parents=True,exist_ok=True)
@@ -111,13 +106,11 @@ class NgspiceRunner:
         digest=hashlib.sha256(original.encode()).hexdigest()
         if mode=='full' and self.dc_approved_hash!=digest:
             raise ValueError('Full simulation requires a passing DC check for this exact candidate')
-        source=simulation_source(original,mode)
+        source=deck(original,self.target,self.library,mode)
         number = self.next_number
         self.next_number += 1
         self.count += 1
         prefix = self.results/'logs'/f'simulation_{number:03d}'
-        if str(self.library) not in source:
-            raise ValueError('Netlist must use the SKY130 library specified in tools_path.md')
         prefix.with_suffix('.spice').write_text(source)
         command = [str(self.executable), '-b', str(prefix.with_suffix('.spice').resolve())]
         started = time.perf_counter()
@@ -132,11 +125,9 @@ class NgspiceRunner:
                 log.write('\nERROR: ngspice timeout\n')
             log.write(f'\nRETURN_CODE: {code}\n')
         text = prefix.with_suffix('.log').read_text()
-        (self.results/'current.log').write_text(text)
         record = parse_log(text, code, self.target, mode)
         if mode=='dc':self.dc_approved_hash=digest if record['dc_passed'] else None
         record.update(candidate_sha256=digest, simulation_number=number, seconds=time.perf_counter()-started,
                       log=str(prefix.with_suffix('.log')))
         save(prefix.with_suffix('.json'), record)
-        save(self.results/'measurements.json', record)
         return record

@@ -6,21 +6,23 @@ import os
 import subprocess
 import sys
 from analog_agents.config import ROOT, project_path
-from agents.sizing_agent.agent import validate_candidate
+from agents.sizing_agent.agent import check_library
+from analog_agents.reference import load_references
 from scripts import service
 from analog_agents.models import resolve
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--baseline-only',action='store_true',help='CPU validation and both PDFs, no GPU/model')
+    parser.add_argument('--baseline-only',action='store_true',help='CPU validation of one untouched reference (needs --reference) and both PDFs, no GPU/model')
+    parser.add_argument('--reference',help='reference id for --baseline-only')
     parser.add_argument('--model',help='qwen | fable|sonnet|opus (Claude Code) | astra|sol|luna (Codex); same as SIZING_MODEL')
     args=parser.parse_args()
-    base=ROOT/'circuits/two_stage_opamp'
-    ref=(base/'reference/reference.spice').read_text()
-    validate_candidate(ref,ref,json.loads((base/'specs/target.json').read_text()))
+    base=ROOT/'circuits/opamp'
+    specs=json.loads((base/'specs/target.json').read_text())
+    check_library(specs,load_references(base/'reference'))  # fail fast on any inconsistent library entry, before a GPU service starts
     command=[sys.executable,str(ROOT/'main.py')]
-    if args.baseline_only:return subprocess.call(command+['--baseline-only'],cwd=ROOT)
+    if args.baseline_only:return subprocess.call(command+['--baseline-only']+(['--reference',args.reference] if args.reference else []),cwd=ROOT)
     if args.model:os.environ['SIZING_MODEL']=args.model
     backend=resolve()[0]  # fail fast on a missing/unknown/conflicting selection
     if backend!='qwen':return subprocess.call(command,cwd=ROOT)  # cloud CLI models need no local GPU service

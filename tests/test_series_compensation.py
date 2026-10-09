@@ -1,13 +1,9 @@
-"""Offline validation of the series RC topology; no simulator/model invocation."""
-import json
-from pathlib import Path
+"""Offline validation of a reference's series R-C compensation constraints and the report's netlist table."""
 import pytest
-from agents.sizing_agent.agent import apply_changes, parameters, number, validate_candidate
-from simulator.report_generator import topology
-from reportlab.graphics.shapes import Rect
-ROOT=Path(__file__).resolve().parents[1]
-REF=(ROOT/'circuits/two_stage_opamp/reference/reference.spice').read_text()
-TARGET=json.loads((ROOT/'circuits/two_stage_opamp/specs/target.json').read_text())
+from agents.sizing_agent.agent import apply_changes, validate_candidate
+from analog_agents.spice import number, parameters
+from simulator.report_generator import mos_table
+from helpers import REF, TARGET
 
 
 def test_resistor_geometry_is_adjustable_but_sheet_resistance_fixed():
@@ -23,9 +19,10 @@ def test_resistor_geometry_is_adjustable_but_sheet_resistance_fixed():
     with pytest.raises(ValueError):validate_candidate(REF,after.replace('RCOMP ncomp out','RCOMP ncomp 0'),TARGET)
 
 
-def test_new_and_capacitor_only_report_drawings():
-    assert any(isinstance(x,Rect) for x in topology(REF).contents)
-    old=REF.replace('CCOMP n2 ncomp {CC}','CCOMP n2 out {CC}').replace('RCOMP ncomp out {RSH_RZ*L_RZ/W_RZ}\n','')
-    assert not any(isinstance(x,Rect) for x in topology(old).contents)
-    wrong=REF.replace('RCOMP ncomp out','RCOMP ncomp 0')
-    with pytest.raises(ValueError):topology(wrong)
+def test_connectivity_table_is_parsed_from_netlist_not_hardcoded():
+    rows=mos_table(REF,parameters(REF))
+    by_name={r[0]:r for r in rows}
+    assert len(rows)==8 and by_name['XM7'][1]=='PMOS' and by_name['XM7'][2:6]==['out','n2','vdd','vdd']
+    assert by_name['XM5'][6]=='10' and by_name['XM5'][7]=='1'
+    swapped=REF.replace('XM7 out n2 vdd vdd','XM7 out n1 vdd vdd')
+    assert {r[0]:r for r in mos_table(swapped,parameters(swapped))}['XM7'][3]=='n1'

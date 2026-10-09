@@ -1,1 +1,1 @@
-"""Retained local Qwen interface and service configuration."""
+"""Shared infrastructure of the three agents: model clients, reference library, evidence views, formulas."""

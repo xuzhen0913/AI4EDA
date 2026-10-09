@@ -1,0 +1,86 @@
+* SKY130 Telescopic-Cascode Op-Amp, NMOS input, single-ended output
+* @profile-begin
+* TOPOLOGY: telescopic-cascode op-amp, NMOS input pair, single-ended output.
+* FAMILY: single-stage cascode (self-compensated by the load capacitor). 9 transistors, ideal bias voltages
+* VBN_TAIL, VBN_CAS, VBP_CAS as sizing parameters; no bias current source.
+* STRUCTURE: one vertical stack per branch: NMOS tail -> NMOS input pair -> NMOS cascode -> PMOS cascoded-mirror
+* load (a diode-connected PMOS mirror pair above a biased PMOS device at VDD). All signal current flows through
+* the whole stack; no folding branch.
+* ADVANTAGES
+* - Best power efficiency and speed of the library's single-stage structures: all current is signal current
+*   (no fold branch), so gm1 per microamp is highest and UGB = gm1/(2*pi*CL) is cheapest in power.
+* - Lowest noise and fewest devices (9) and bias voltages (3); high output resistance from the cascode stacks.
+* - Self-compensated by CL: one dominant pole, large phase margin when all devices are saturated.
+* DISADVANTAGES
+* - Five devices are stacked between VDD and ground (tail, input, cascode, mirror, bias PMOS): at VDD = 1.8 V the
+*   headroom is extremely tight. Input common-mode range and output swing are the smallest of all candidates; the
+*   fixed VCM = 0.9 V may leave no valid bias window, in which case the DC gate cannot be passed at all.
+* - The output DC level depends on exact mirror balance of a high-impedance node, so it is very sensitive.
+* - Single-stage gain is limited to roughly (gm*ro)^2-class values at best; the textbook estimate at L = 0.15-0.5 um in
+*   this process is 50-70 dB (not measured here), so a 60 dB target is only reachable if EVERY device in the cascode stacks stays saturated.
+*   Gain collapses abruptly when any stack device leaves saturation (no gradual degradation).
+* - NOT verified in this library: initial sizes/biases are illustrative. Baseline simulation: the DC gate fails
+*   (7 of 9 devices; output ~0.01 V, power ~15 uW, the stack sits in a near-zero-current state).
+* BEST WHEN: power or noise is the dominant requirement, the supply is comfortable (>= 2.5 V) or the signal
+* swing and input common-mode range requirements are tiny.
+* AVOID WHEN: the supply is 1.8 V or lower with a fixed mid-supply input common mode, a reliable DC pass matters,
+* or wide output swing is needed.
+* @profile-end
+* @analyses-begin
+* [
+*  {"type": "cascode_stage", "input_device": "XM1", "load_capacitance_condition": "load_capacitance_f", "stacks": {"down_from_out": ["XMC2", "XM2"], "up_from_out": ["XML2", "XMP2"]}}
+* ]
+* @analyses-end
+*
+* NOTES (this circuit only; estimates unless marked verified)
+* Not verified by simulation. W_CAS/L_CAS size BOTH XMC (NMOS cascodes above the pair) and XMP (PMOS biased devices at VDD);
+* W_LOAD/L_LOAD size the PMOS diode/mirror pair XML1/XML2; XMP gates are all at VBP_CAS; XMTAIL is set by VBN_TAIL, W_TAIL, L_TAIL.
+* Itail = 0.5*kn*(W_TAIL/L_TAIL)*(VBN_TAIL - VTn)^2 in strong inversion; each branch carries Itail/2, and the PMOS XMP devices at VDD,
+* whose gates are fixed at VBP_CAS, must be able to pass Itail/2: Icap_P = 0.5*kp*(W_CAS/L_CAS)*(VDD - VBP_CAS - |VTp|)^2.
+* If Icap_P < Itail/2 the PMOS side starves (pl/out collapse toward ground or the stack settles in a near-zero-current state);
+* if Icap_P >> Itail/2 XMP goes to the triode region and the output rises to VDD. Match them first.
+* Headroom (VDD = 1.8 V): V(tail) >= VDSAT_tail; V(a) = V(tail) + Vds_in >= V(tail) + VDSAT_in; XMC gate VBN_CAS ~ V(a) + Vgs_C;
+* out >= V(a) + VDSAT_C; XML diode sits below XMP: V(left) = V(pl) - Vsg_L with V(pl) <= VDD - |VDSAT_P|.
+* Input common mode 0.9 V: V(tail) = 0.9 - Vgs_in; a larger input overdrive (smaller W_IN/L_IN) shrinks the room for the tail and cascode.
+* Telescopic stacks cannot tolerate wasted voltage: use short L only where gain allows; check each Vds against the dc_acceptance margins.
+* Performance: A0 ~ gm1*(Rout_up || Rout_down), UGB ~ gm1/(2*pi*CL), PM normally high. Power ~ VDD*Itail (no fold branch).
+*
+* Tunable parameters: the .param lines annotated "; tune MIN..MAX [UNIT] [int]" (everything else is fixed).
+.param W_IN=20          ; tune 1..100 um
+.param L_IN=0.5         ; tune 0.15..2 um
+.param W_CAS=12         ; tune 1..100 um
+.param L_CAS=0.5        ; tune 0.15..2 um
+.param W_LOAD=16        ; tune 1..100 um
+.param L_LOAD=0.5       ; tune 0.15..2 um
+.param W_TAIL=24        ; tune 1..100 um
+.param L_TAIL=1         ; tune 0.15..2 um
+
+* Ideal bias voltages (stand in for a bias generator)
+.param VBN_TAIL=0.8     ; tune 0.2..1.6 V
+.param VBN_CAS=1.0      ; tune 0.2..1.6 V
+.param VBP_CAS=0.8      ; tune 0.2..1.6 V
+
+* Ideal bias voltages
+VBNTAIL bn_tail 0 {VBN_TAIL}
+VBNCAS bn_cas 0 {VBN_CAS}
+VBPCAS bp_cas 0 {VBP_CAS}
+* NMOS input pair, tail source and NMOS cascodes
+XM1 a vinp tail 0 sky130_fd_pr__nfet_01v8
++ W={W_IN} L={L_IN}
+XM2 b vinn tail 0 sky130_fd_pr__nfet_01v8
++ W={W_IN} L={L_IN}
+XMTAIL tail bn_tail 0 0 sky130_fd_pr__nfet_01v8
++ W={W_TAIL} L={L_TAIL}
+XMC1 left bn_cas a 0 sky130_fd_pr__nfet_01v8
++ W={W_CAS} L={L_CAS}
+XMC2 out bn_cas b 0 sky130_fd_pr__nfet_01v8
++ W={W_CAS} L={L_CAS}
+* PMOS mirror load with PMOS devices from VDD (output = drain of XMC2/XML2)
+XML1 left left pl vdd sky130_fd_pr__pfet_01v8
++ W={W_LOAD} L={L_LOAD}
+XML2 out left pr vdd sky130_fd_pr__pfet_01v8
++ W={W_LOAD} L={L_LOAD}
+XMP1 pl bp_cas vdd vdd sky130_fd_pr__pfet_01v8
++ W={W_CAS} L={L_CAS}
+XMP2 pr bp_cas vdd vdd sky130_fd_pr__pfet_01v8
++ W={W_CAS} L={L_CAS}

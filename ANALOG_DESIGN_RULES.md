@@ -1,10 +1,8 @@
 # 模拟电路公式手册
 
-每个 agent 每次调用、开始推理前，必须完整阅读本文件。
-本文件列符号、公式及适用条件，第 14 节为通用诊断自检；不含具体电路的参数方案。
-输入的 derived_calculations 是 Python 对本轮实测预先算好的数值（估算），优先引用，不要心算；仿真实测优先。
+尺寸优化 agent 的通用公式与判据：符号、公式及适用条件，第 14 节为通用诊断自检。不含具体电路的参数方案。
 公式中的器件/级编号是数学记号，不指向项目中的特定电路。工艺模型与测量值不等同于理想近似。
-两级运放出现第二级器件失饱和时，先按第 12 节用实测电流与当前 W/L 算出失配比 Rm 再推理；性能分析先读第 13 节。
+某节点上的器件失饱和时，先按第 12 节比较“强制电流”与“能力电流”再推理；增益、带宽、功耗与电压余量的通用估算见第 13 节。
 
 ## 1. 单位、定义与基本定律
 
@@ -89,7 +87,6 @@ deltaVout≈(deltaIup_at_fixed_Vout−deltaIdown_at_fixed_Vout)/(gup+gdown+gload
 源跟随器：Av≈gm/(gm+gmb+gload)，为简化模型。
 源退化、忽略 ro/体效应时：Gm_eff≈gm/(1+gm*Rs)。
 简单共栅输入电阻≈1/(gm+gmb)，受偏置与外部连接影响。
-两器件 cascode 简化输出阻抗：Rout≈ro1+ro2+(gm2+gmb2)*ro1*ro2。
 级联且负载已计入时：Atotal=product(Ai)。
 差模/共模：vid=vip−vin，vicm=(vip+vin)/2；CMRR=abs(Ad/Acm)，CMRR_dB=20log10(CMRR)。
 PSRR 的分子、分母依测量定义，常用 abs(Ad/Asupply)；单位及归一化需按 testbench。
@@ -147,30 +144,33 @@ Pelgrom 近似：sigma(DeltaVT)=AVT/sqrt(W*L)，sigma(DeltaBeta/Beta)=Abeta/sqrt
 THD=sqrt(sum(Vharmonic_rms²))/Vfundamental_rms；THD_dB=20log10(THD)。
 采样保持/开关网络的周期稳态不等同于普通 DC OP。
 
-## 12. 二极管接法镜像负载的两级运放：级间电流一致性（DC）
+## 12. 节点电流一致性（DC 工作点的通用判断）
 
-记号：镜像参考管 Ma（栅漏相连）、输出管 Mb；第二级共源管 Mg（栅接 Mb 漏）；电流汇 Ms；out 为 Mg、Ms 共漏节点；Ia=Ma 电流=Itail/2；Is=Ms 电流。参数名由 device_dimensions 给出。
-F1：输入相同、Mb 饱和时 V(nB)≈V(nA)，故 |VGS_g|≈|VGS_a|，由 Ia 与 (W/L)a 决定，与 (W/L)g 无关。
-F2：out 空载时 KCL 强制 Ig=Is；真正的问题是 Mg 在该 VGS 下的能力电流 Ig,cap≈Ia*[(W/L)g/(W/L)a] 是否等于 Is。
-失配比 Rm=[(W/L)g/(W/L)a]*(Ia/Is)。Rm>1：Mg 想多供，out 被推向 Mg 侧电源轨，Vsd_g 变小，Mg 进线性区；Rm<1：Ms 先失饱和；Rm≈1 时 out 居中。
-Rm 为一阶估算（L、VT(L)、lambda 使平衡点随 L 移动），out 对 Rm 极敏感：先按 (W/L)g_target=(W/L)a*Is/Ia 估值，再按实测 out 偏离中点的方向微调。
-增大 (W/L)g 使 Rm 增大，对 Rm>1 只会更糟；降低 Rm 的通道：减小 (W/L)g、增大 Ms 倍率、减小 Itail、增大 (W/L)a（镜像两管须相同）。
-仅改 Iref（倍率不变）同比缩放所有电流，Rm 不变，只增加功耗。W↑、L↓ 对 W/L 同向，先算净 W/L。
-|VDSAT|≈sqrt(2I/beta)∝1/sqrt(W/L)；M=Vsd−|VDSAT|；Vov=|VGS|−|VT|；两者不同。Vov<0 而 M>0 可以是正常弱反型工作点，是否失败看配置判据，读 dc_acceptance 的具体失败项。
-CC、Rz 无 DC 通路，不能修复 DC 失败项。越界提案被拒绝且无新测量。某改动使失败项恶化即方向反了，下一轮换通道。
-性能阶段改 (W/L)g、(W/L)a、Itail、Iref、Ms 倍率会移动 Rm，已通过的 DC 可能重新失败；增大 gm2 时与 Ms 成组缩放并重核 out。
+任意节点的静态 KCL 要求流入等于流出。节点上若有“被电流源/镜像强制”的支路，其电流 Iforced 不由本节点电压决定；
+另一支路的器件栅压若由别处（二极管接法参考管、镜像、固定偏置电压）决定，则它在该栅压下有“能力电流”Icap。
+Icap 与 Iforced 不一致时，节点电压不会停在中间：它被推向使二者相等的方向，直到某个器件进入线性区（Vd<|VDSAT|）或截止。
+一阶估算：若器件 Mg 的栅压 VGS 与参考管 Ma 相同（同型、同源极电位、均饱和），则
+Icap,g ≈ Iref,a*[(W/L)g/(W/L)a]（含沟道调制时再乘 (1+lambda_g*Vd_g)/(1+lambda_a*Vd_a)）。
+失配比 Rm = Icap/Iforced：Rm>1 则节点被推向 Mg 所接的电源轨、Mg 失饱和；Rm<1 则强制支路器件先失饱和；Rm≈1 时节点居中。
+Rm 是一阶估算（L、VT(L)、lambda 使平衡点随 L 移动），节点电压对 Rm 极敏感：先按目标 W/L 估值，再按实测节点偏离方向微调。
+按同一倍率缩放参考电流和所有镜像输出不改变 Rm，只改变功耗；调整 W、L 对 W/L 同向，先算净 W/L。
+|VDSAT|≈sqrt(2I/beta)∝1/sqrt(W/L)。Vov<0 而 M>0 可以是正常弱反型工作点，是否失败看判据，读 devices 表的 failed_checks。
+无 DC 通路的元件（电容、与电容串联的电阻）不能修复 DC 失败项。某改动使失败项恶化即方向反了，下一轮换通道。
+性能阶段改变任何影响上述电流比例的参数，已通过的 DC 可能重新失败，改后须重核节点电压。
 
-## 13. 两级 Miller 运放：增益、带宽、零极点与 PM
+## 13. 增益、带宽、功耗与电压余量的通用估算
 
-A0≈A1*A2；A1≈gm_in/(gds_in+gds_a_out)；A2≈gm_g/(gds_g+gds_s)；gds≈lambda*I，lambda∝1/L：同电流增大 L 提高 gm/gds。
+多级增益 A0≈product(Ai)；每级 Ai≈Gm_i*Rout_i；Rout 为该节点向各支路看进去的电阻并联；gds≈lambda*I，lambda∝1/L：同电流增大 L 提高 gm/gds。
+Cascode 堆栈（自输出节点向内，两器件时即 Rout≈ro1+ro2+gm2*ro1*ro2）：R_stack=r_top+R_below+gm_top*r_top*R_below，r=1/gds；并联支路的 gds 相加；体效应使 gm 取 gm+gmb。
+输出电阻越大增益越高，但堆栈中任一器件失饱和都会使其对 R 的贡献塌缩。
 弱反型 gm≈I/(n*UT)，增大 W 几乎不增 gm，只增寄生电容；强反型 gm=sqrt(2*beta*I)，增 W 或 I 均增 gm。用 gm/I 判断位置。
-UGB≈gm1/(2*pi*Cc)。Cc 增大使 UGB、RHP 零点 gm_g/Cc 同时下降，p2 上升，PM 净变化需核算；Cc 对 DC 增益无贡献。
-几何电阻 R=Rsheet*L/W：L、W 同比放大 R 不变；增大 R 需增大 L 或减小 W。
-Miller 模型：omega_u≈Gm1/Cc；omega_p2≈gm_g*Cc/(C1*C2+C1*Cc+C2*Cc)≈gm_g/C2（CL 主导）；无 Rz 零点 s_z=+gm_g/Cc（RHP）。
-串联 Rz：omega_z=1/[Cc*(Rz−1/gm_g)]；Rz<1/gm_g 零点仍在 RHP；Rz>1/gm_g 为 LHP；抵消 p2 约 Rz≈1/gm_g+1/(Cc*omega_p2)；Rz*C1 额外极点须远高于 UGB。
-PM≈90°−atan(wu/wp2)−atan(wu/wz_RHP)+atan(wu/wz_LHP)−atan(wu/wp3)。仅有 RHP 零点在 UGB 附近时 PM 损失约 30–45°。
-增大 p2 的通道是增大 gm_g（并保持第 12 节一致性），不是增大 Cc。
-功耗 P≈VDD*(Iref+Itail+Is)；余量可换 gm（UGB、p2）。
+单级（单主极点、输出节点电容 CL 主导）：UGB≈Gm/(2*pi*CL)，PM 由非主极点 p_nd（如 cascode 内部节点 p≈gm_c/C_node）决定：
+PM≈90°−atan(UGB/p_nd)−…；负载电容既设定 UGB 也提供补偿。多级则需第 8、9 节的补偿。
+电压余量：同一支路自电源到地的器件须满足 sum(Vds_i)+(其余压降)=VDD 且每个器件 Vds_i>=|VDSAT_i|；
+堆叠 n 个器件的最小供电≈sum(|VDSAT_i|)+各级栅源偏置带来的额外压降；堆得越高，输入共模范围和输出摆幅越小。
+由固定偏置电压设置的电流：强反型 I≈beta*(VGbias−VS−VT)²/2；偏置电压、W/L 与 VS 共同决定电流，改任何一个都会移动该支路及其上堆叠器件的 Vds。
+Cascode 栅偏置的选择：使被它偏置的器件在其源极电位下 Vds 刚好大于 |VDSAT|，同时不压缩下方器件的余量。
+功耗 P≈VDD*(各电源支路电流之和)；有余量时可换 gm（UGB、非主极点）。
 
 ## 14. 通用诊断自检
 
@@ -179,18 +179,19 @@ A. 提案前自检，不满足则重写：
 2. 在边界内（以 target 为准，勿凭印象说“已最大”）；整数参数取整；有效尺寸在器件边界内。
 3. 多参数决定的量（R=Rsheet*L/W、W/L、倍率乘积）先算净变化；同比改分子分母等于没改。
 4. 用 derived_calculations 的数值预测各指标变化，预测不到的不改。
-5. 最多 3 个改动，各有独立机制，避免无法归因。
+5. 各改动有独立机制，避免无法归因。
 6. 同参数连续两轮同方向无改善或 A→B→A 振荡：换通道。
 
-B. 工作点：gm/I≈25–30 为弱反型（增 W 不增 gm，只能增 I）；5–15 为中强反型。节点贴近电源轨、某管 Vds 很小，通常是上下两路电流不一致（第 6、12 节），不是 W 太小。
+B. 工作点：gm/I≈25–30 为弱反型，5–15 为中强反型（第 13 节）。节点贴近电源轨、某管 Vds 很小，通常是上下两路电流不一致（第 6、12 节），不是 W 太小。
 
-C. 情形→建议：
+C. 情形→建议（电路的具体通道以 reference 的说明为准）：
 - 管线性区：比较其能力电流与强制电流并使之相等，改后核对节点是否居中。
-- 管截止：查栅偏置来源，不要改其他支路。
-- 增益低：看 A1、A2 哪级低，增大该级 L 或 gm。
-- UGB 低：减小 Cc 或增大 gm1（增电流）。
-- PM 低：先看零点方向（Rz 对 1/gm2）与 p2/UGB；RHP 零点先使其变 LHP；p2<2*UGB 时增大 gm2。
-- PM 过大而 UGB 低：减小 Cc，留 5–10° 裕度。
+- 管截止：查栅偏置来源（偏置电压/镜像参考），不要改其他支路。
+- 整条堆栈的管子同时失败、节点电压贴近某一电源轨：先怀疑偏置电压或电流支路，使整条支路有电流，再逐级核对 Vds。
+- 增益低：看各级 Gm*Rout，增大贡献最小的一级的 L 或 gm；堆栈中有管子失饱和时先恢复饱和。
+- UGB 低：增大输入级 gm（增电流或 W/L）或减小决定 UGB 的电容。
+- PM 低：先识别非主极点与零点的位置，使其远离 UGB；有补偿元件时按第 9 节核算，无补偿元件时减小负载电容或增大非主极点所在节点的 gm。
+- PM 过大而 UGB 低：把裕量换成带宽，留 5–10° 裕度。
 - 功耗超标：降低电流最大的一路并核对 gm、UGB、DC；有余量则用于增 gm。
 - 多个缺口：先修使其他指标不可测的 DC 失败或使相位失效的零点；不为一项牺牲已满足项。
 - 全部满足：只小步留余量，随后停止。

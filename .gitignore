@@ -4,8 +4,7 @@
 
 # Service logs and generated experiment evidence
 /logs/
-/circuits/two_stage_opamp/working/
-/circuits/two_stage_opamp/results/
+/circuits/opamp/results/
 
 # Python caches
 .pytest_cache/

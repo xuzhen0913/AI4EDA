@@ -1,0 +1,96 @@
+* SKY130 Folded-Cascode Op-Amp, PMOS input, single-ended output
+* @profile-begin
+* TOPOLOGY: folded-cascode op-amp, PMOS input pair, single-ended output.
+* FAMILY: single-stage cascode (self-compensated by the load capacitor). 11 transistors, ideal bias-voltage
+* sources (VBP_TAIL, VBN_FOLD, VBN_CAS, VBP_CAS) as sizing parameters; no bias current source.
+* STRUCTURE: PMOS differential pair on a PMOS tail source from VDD; NMOS current sinks to ground at the pair's
+* drain nodes (the "fold"); NMOS cascodes carry the folded signal current up into a PMOS current-mirror load with
+* PMOS devices above it (from VDD); the output is the drain of the mirror/cascode branch.
+* ADVANTAGES
+* - One dominant pole at the output (set by CL) -> self-compensated, usually high phase margin; no CC needed.
+* - UGB = gm1/(2*pi*CL); modest current gives a 10 MHz-class UGB into 2 pF.
+* - Cascode output resistance gives more gain than a simple differential stage.
+* - PMOS input: input common-mode range reaches down to ground (useful when the input sits low), lower flicker
+*   noise than an NMOS pair, and the pair is not stacked under the cascodes, so ICMR/swing beat telescopic.
+* DISADVANTAGES
+* - Fold branches add current: supply current about 2x the tail current or more; more devices, more noise.
+* - PMOS input pair has lower gm per current than NMOS, so more tail current is needed for a given UGB.
+* - Delicate manual bias: four ideal bias voltages must keep 11 devices saturated at once; a wrong bias collapses
+*   the circuit into a near-zero-current state.
+* - Single-stage gain is limited to roughly (gm*ro)^2-class values at best; the textbook estimate at L = 0.15-0.5 um in
+*   this process is 50-70 dB (not measured here), so a 60 dB target is only reachable if EVERY device in the cascode stacks stays saturated.
+*   Gain collapses abruptly when any stack device leaves saturation (no gradual degradation).
+* - NOT verified in this library: initial sizes/biases are illustrative. Baseline simulation: the DC gate fails
+*   for 9 of 11 devices (output ~0.004 V, supply power ~15 uW); bias voltages and tail/fold current relationship must be re-derived.
+* BEST WHEN: a single-stage, self-compensated amplifier with a low input common mode or low-noise PMOS input is
+* wanted, and gain ~60 dB is enough and bias tuning budget exists.
+* AVOID WHEN: a quick, reliable DC pass is needed (many coupled bias voltages), UGB per power is paramount (prefer
+* NMOS input), or gain well above ~60 dB is required.
+* @profile-end
+* @analyses-begin
+* [
+*  {"type": "cascode_stage", "input_device": "XM1", "load_capacitance_condition": "load_capacitance_f", "stacks": {"up_from_out": ["XML2", "XMP2"], "down_from_out": ["XMC2", ["XMF2", "XM2"]]}}
+* ]
+* @analyses-end
+*
+* NOTES (this circuit only; estimates unless marked verified)
+* Not verified by simulation (polarity mirror of the NMOS-input folded cascode). W_CAS/L_CAS size BOTH XMC (NMOS cascodes)
+* and XMP (PMOS cascodes at VDD); W_LOAD/L_LOAD size the PMOS mirror XML1/XML2; W_FOLD/L_FOLD size the NMOS fold sinks XMF1/XMF2.
+* Itail = 0.5*kp*(W_TAIL/L_TAIL)*(VDD - VBP_TAIL - |VTp|)^2; each input device carries Itail/2.
+* Fold sink I_F = 0.5*kn*(W_FOLD/L_FOLD)*(VBN_FOLD - VTn)^2. Leg current in each cascode/mirror leg = I_F - Itail/2 > 0 required;
+* a symmetric choice is I_F ~ Itail.
+* Headroom: XMF Vds >= VDSAT_F; node a = Vds_F; input pair Vsd = V(tail) - V(a) >= |VDSAT_in|, V(tail) <= VDD - |VDSAT_tail|.
+* VBN_CAS ~ V(a) + Vgs_C so XMC (source at a) is saturated. Mirror side: V(pl) = VDD - Vsd_P with VBP_CAS ~ VDD - |Vgs_P| - Vsd_P;
+* V(left) = V(pl) - Vsg_L.
+* DC symptoms: all currents near zero and out near 0 V -> tail cut off (VBP_TAIL too close to VDD) or fold sinks too weak/strong; adjust bias voltages
+* before changing sizes. With equal currents the high-impedance output settles where NMOS- and PMOS-side currents balance; trim biases once all devices conduct.
+* Performance: A0 ~ gm1*(Rout_up || Rout_down), UGB ~ gm1/(2*pi*CL), PM normally high. Power ~ VDD*(Itail + 2*I_F).
+*
+* Tunable parameters: the .param lines annotated "; tune MIN..MAX [UNIT] [int]" (everything else is fixed).
+.param W_IN=20          ; tune 1..100 um
+.param L_IN=0.5         ; tune 0.15..2 um
+.param W_CAS=12         ; tune 1..100 um
+.param L_CAS=0.5        ; tune 0.15..2 um
+.param W_LOAD=16        ; tune 1..100 um
+.param L_LOAD=0.5       ; tune 0.15..2 um
+.param W_TAIL=24        ; tune 1..100 um
+.param L_TAIL=1         ; tune 0.15..2 um
+.param W_FOLD=20        ; tune 1..100 um
+.param L_FOLD=0.5       ; tune 0.15..2 um
+
+* Ideal bias voltages (stand in for a bias generator)
+.param VBP_TAIL=1.0     ; tune 0.2..1.6 V
+.param VBN_CAS=1.0      ; tune 0.2..1.6 V
+.param VBP_CAS=0.8      ; tune 0.2..1.6 V
+.param VBN_FOLD=0.75    ; tune 0.2..1.6 V
+
+* Ideal bias voltages
+VBPTAIL bp_tail 0 {VBP_TAIL}
+VBNCAS bn_cas 0 {VBN_CAS}
+VBPCAS bp_cas 0 {VBP_CAS}
+VBNFOLD bn_fold 0 {VBN_FOLD}
+* PMOS input pair and tail source
+XM1 a vinp tail vdd sky130_fd_pr__pfet_01v8
++ W={W_IN} L={L_IN}
+XM2 b vinn tail vdd sky130_fd_pr__pfet_01v8
++ W={W_IN} L={L_IN}
+XMTAIL tail bp_tail vdd vdd sky130_fd_pr__pfet_01v8
++ W={W_TAIL} L={L_TAIL}
+* NMOS fold current sinks and NMOS cascodes (output = drain of XMC2/XML2)
+XMF1 a bn_fold 0 0 sky130_fd_pr__nfet_01v8
++ W={W_FOLD} L={L_FOLD}
+XMF2 b bn_fold 0 0 sky130_fd_pr__nfet_01v8
++ W={W_FOLD} L={L_FOLD}
+XMC1 left bn_cas a 0 sky130_fd_pr__nfet_01v8
++ W={W_CAS} L={L_CAS}
+XMC2 out bn_cas b 0 sky130_fd_pr__nfet_01v8
++ W={W_CAS} L={L_CAS}
+* PMOS mirror load with PMOS cascode devices above it
+XML1 left left pl vdd sky130_fd_pr__pfet_01v8
++ W={W_LOAD} L={L_LOAD}
+XML2 out left pr vdd sky130_fd_pr__pfet_01v8
++ W={W_LOAD} L={L_LOAD}
+XMP1 pl bp_cas vdd vdd sky130_fd_pr__pfet_01v8
++ W={W_CAS} L={L_CAS}
+XMP2 pr bp_cas vdd vdd sky130_fd_pr__pfet_01v8
++ W={W_CAS} L={L_CAS}

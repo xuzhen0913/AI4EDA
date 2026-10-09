@@ -1,0 +1,27 @@
+{
+  "process": "sky130",
+  "corner": "tt",
+  "conditions": {
+    "vdd_v": 1.8,
+    "temperature_c": 27,
+    "input_common_mode_v": 0.9,
+    "load_capacitance_f": 2e-12
+  },
+  "targets": {
+    "dc_gain_db": {"min": 55},
+    "ugb_hz": {"min": 80000000},
+    "phase_margin_deg": {"min": 70},
+    "power_w": {"max": 0.0005}
+  },
+  "device_limits": {"min_w_um": 1, "max_w_um": 100, "min_l_um": 0.15, "max_l_um": 2},
+  "dc_acceptance": {
+    "minimum_drain_current_a": 1e-09,
+    "minimum_overdrive_v": 0.0,
+    "minimum_saturation_margin_v": 0.0
+  },
+  "ac_validation": {
+    "require_positive_loop_real_lf": true,
+    "sweep": {"points_per_decade": 100, "start_hz": 1, "stop_hz": 1000000000}
+  },
+  "budgets": {"max_rounds": 3, "max_dc_iterations": 5, "max_iterations": 10}
+}

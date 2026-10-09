@@ -2,7 +2,11 @@ import json
 import time
 from openai import OpenAI
 from .rules import with_global_rules
-from .context import compact_payload, dumps
+
+
+def dumps(value):
+    return json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+
 
 class LocalClient:
     def __init__(self, config):
@@ -11,13 +15,14 @@ class LocalClient:
         self.api = OpenAI(base_url=f"http://127.0.0.1:{config['port']}/v1",
                           api_key="local-only", timeout=config["timeout_seconds"], max_retries=0)
 
-    def ask(self, prompt, payload, schema, agent_name="test"):
+    def ask(self, prompt, payload, schema, agent_name="test", use_rules=False):
+        """One structured call. `use_rules` appends the global formula handbook (the sizing agent's reference)."""
         started = time.perf_counter()
         record = {"agent": agent_name, "status": "failed", "usage": None}
         self.calls.append(record)
         try:
-            prompt, payload = with_global_rules(prompt, payload, record)
-            payload = compact_payload(payload, record)
+            if use_rules:
+                prompt, payload = with_global_rules(prompt, payload, record)
             return self._ask(prompt, payload, schema, record)
         except Exception as exc:
             record["error"] = str(exc)
@@ -35,7 +40,7 @@ class LocalClient:
         prompt_ids = self.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, enable_thinking=False)
         record['input_tokens_checked'] = len(prompt_ids)
         if len(prompt_ids) + self.config['max_tokens'] > self.config['context_length']:
-            raise ValueError(f'Packed experiment input ({len(prompt_ids)} tokens) + output reserve ({self.config["max_tokens"]}) exceeds context window ({self.config["context_length"]}); constraints/current evidence were not silently dropped')
+            raise ValueError(f'Input ({len(prompt_ids)} tokens) + output reserve ({self.config["max_tokens"]}) exceeds context window ({self.config["context_length"]}); constraints/current evidence were not silently dropped')
         response = self.api.chat.completions.create(
             model=self.config["served_model"],
             messages=messages,
@@ -47,11 +52,7 @@ class LocalClient:
                                "completion_tokens": response.usage.completion_tokens,
                                "total_tokens": response.usage.total_tokens}
         else:
-            from transformers import AutoTokenizer
-            from .config import project_path
-            tokenizer = AutoTokenizer.from_pretrained(project_path(self.config['model_dir']), local_files_only=True)
-            prompt_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, enable_thinking=False)
-            output_ids = tokenizer.encode(choice.message.content or '', add_special_tokens=False)
+            output_ids = self.tokenizer.encode(choice.message.content or '', add_special_tokens=False)
             record['usage'] = {'prompt_tokens':len(prompt_ids), 'completion_tokens':len(output_ids),
                                'total_tokens':len(prompt_ids)+len(output_ids)}
             record['usage_source'] = 'local model tokenizer; output EOS accounting may differ from server'
