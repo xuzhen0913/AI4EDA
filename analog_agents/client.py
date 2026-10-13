@@ -16,13 +16,14 @@ class LocalClient:
                           api_key="local-only", timeout=config["timeout_seconds"], max_retries=0)
 
     def ask(self, prompt, payload, schema, agent_name="test", use_rules=False):
-        """One structured call. `use_rules` appends the global formula handbook (the sizing agent's reference)."""
+        """One structured call. `use_rules` appends the global formula handbook (the sizing agent's reference):
+        True for all of it, or a collection of section numbers for just those."""
         started = time.perf_counter()
         record = {"agent": agent_name, "status": "failed", "usage": None}
         self.calls.append(record)
         try:
             if use_rules:
-                prompt, payload = with_global_rules(prompt, payload, record)
+                prompt, payload = with_global_rules(prompt, payload, record, use_rules)
             return self._ask(prompt, payload, schema, record)
         except Exception as exc:
             record["error"] = str(exc)
@@ -45,7 +46,8 @@ class LocalClient:
             model=self.config["served_model"],
             messages=messages,
             temperature=self.config["temperature"], max_tokens=self.config["max_tokens"],
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}, "guided_json": schema})
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}, "guided_json": schema,
+                        "repetition_penalty": self.config.get("repetition_penalty", 1.0)})
         choice = response.choices[0]
         if response.usage is not None:
             record["usage"] = {"prompt_tokens": response.usage.prompt_tokens,

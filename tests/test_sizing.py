@@ -10,7 +10,7 @@ def test_valid_change_preserves_matching_and_topology():
 
 @pytest.mark.parametrize('change',[
     dict(parameter='VDD',old_value='1.8',new_value='2'),            # testbench condition, not a parameter of the circuit
-    dict(parameter='RSH_RZ',old_value='100',new_value='200'),       # fixed constant
+    dict(parameter='VBIAS',old_value='1',new_value='2'),            # not a parameter of this circuit
     dict(parameter='W_IN',old_value='10',new_value='101'),
     dict(parameter='W_IN',old_value='11',new_value='12'),
     dict(parameter='W_IN',old_value='10',new_value='10\n.end'),

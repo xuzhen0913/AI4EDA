@@ -1,4 +1,7 @@
-"""JSON-schema helpers shared by all agents (strict objects, every property required)."""
+"""JSON-schema helpers shared by all agents (strict objects, every property required).
+
+Only keywords the xgrammar backend supports (no maxLength/maxItems): anything else makes vLLM fall back to outlines,
+whose automaton build can block the engine loop past its 60 s watchdog. Length limits live in prompts and checks."""
 
 
 def obj(properties):

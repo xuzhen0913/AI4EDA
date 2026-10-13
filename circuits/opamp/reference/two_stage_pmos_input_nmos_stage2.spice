@@ -18,9 +18,11 @@
 * DISADVANTAGES
 * - PMOS input pair has lower mobility, hence lower gm per current and lower UGB (gm1/(2*pi*CC)) than the
 *   NMOS-input version at equal power; reaching a given UGB costs more tail current or a smaller CC.
-* - NOT yet verified by simulation in this library: initial sizes are illustrative (baseline simulation: 7 of 8 devices fail
-*   the DC gate, output ~1.78 V, and the AC gain is far below 60 dB); expect the same output-node current-matching issue as the
-*   other two-stage reference and compensation tuning before the specs are met.
+* - NOT yet verified by simulation in this library: initial sizes are illustrative. Baseline simulation (loop closed): 5 of 8 devices
+*   fail the DC gate although the loop holds out at 0.9 V: at VCM = 0.9 V the PMOS input pair is cut off (Vsg 0.89 V against
+*   |Vth| 0.99 V at L_IN = 0.5 um; 0.6 uA per device) and the PMOS tail is pulled into triode. The pair needs its source at VCM + |Vth|
+*   (measured |Vth| of this PDK's pfet_01v8 (W = 100 um, Vsb = 0.1 V): 0.68 V at L = 0.15 um, 0.95 V at 0.25 um, 1.02 V at 0.5 um), so L_IN must be at (or very near) the 0.15 um minimum, which costs gain. Compensation needs tuning as in the
+*   NMOS-input two-stage reference.
 * - Needs frequency compensation; PM is sensitive to the series-resistor value versus 1/gm of the gain device.
 * - Power is spent in two stages; weaker supply rejection than cascoded single stages.
 * BEST WHEN: gain >= ~60 dB at 1.8 V with wide output swing is needed AND the input common mode is low (near
@@ -31,31 +33,35 @@
 * @analyses-begin
 * [
 *  {"type": "current_balance", "gain_device": "XM7", "bias_device": "XM6", "mirror_reference_device": "XM3"},
-*  {"type": "miller_compensation", "input_device": "XM1", "first_stage_load_device": "XM3", "gain_device": "XM7", "bias_device": "XM6", "capacitor_parameter": "CC", "series_resistor_expression": "RSH_RZ*L_RZ/W_RZ", "load_capacitance_condition": "load_capacitance_f"}
+*  {"type": "miller_compensation", "input_device": "XM1", "first_stage_load_device": "XM3", "gain_device": "XM7", "bias_device": "XM6", "capacitor_parameter": "CC", "series_resistor_expression": "R_RZ", "load_capacitance_condition": "load_capacitance_f"}
 * ]
 * @analyses-end
+* @levers-begin
+*  {"dc_gain_db": {"L_IN": "+", "L_STAGE2": "+", "L_LOAD": "+"}, "ugb_hz": {"IBIAS": "+", "W_IN": "+", "N_TAIL": "+", "N_STAGE2_BIAS": "+", "CC": "-"}, "phase_margin_deg": {"R_RZ": "+", "CC": "+"}, "power_w": {"IBIAS": "+", "N_TAIL": "+", "N_STAGE2_BIAS": "+"}}
+* @levers-end
+* @feedback-input: vinp
 *
 * NOTES (this circuit only; estimates unless marked verified)
 * Derived by polarity symmetry from the NMOS-input two-stage reference; NOT verified by simulation.
 * Roles: XM3 = diode mirror reference (NMOS), XM4 = mirror output, XM7 = NMOS second-stage gain device,
 * XM6 = PMOS second-stage current source, XM5 = PMOS tail source, XMBIAS_P = PMOS diode reference carrying IBIAS.
 * Ia = I(XM3) = Itail/2; Is = I(XM6).
-* [DC] With equal inputs and XM4 saturated, V(n2) ~ V(n1), so VGS(XM7) ~ VGS(XM3): set by Ia and (W/L)3 only.
-* With out unloaded KCL forces I(XM7) = I(XM6) = Is. Capability current of XM7 ~ Ia*[(W/L)7/(W/L)3];
-* Rm = [(W/L)7/(W/L)3]*(Ia/Is). Rm > 1: out is pushed to ground and XM7 goes to the triode region;
-* Rm < 1: XM6 goes to the triode region (out near VDD). Lowering Rm: reduce (W/L)7, raise N_STAGE2_BIAS,
-* reduce N_TAIL, raise (W/L)3. IBIAS scales all currents; Rm is unchanged. Aim out ~ 0.9 V.
-* CC, L_RZ, W_RZ, W_IN do not fix DC. The balanced W_STAGE2/L_STAGE2 shifts with L_STAGE2 and with the
-* process (NMOS vs PMOS mobility): fix L_STAGE2 first, then trim W_STAGE2 by the measured out voltage.
-* [Baseline observed] initial sizes: out ~ 1.78 V (near VDD), DC gate fails; AC gain ~25 dB.
+* [DC] The testbench closes the loop, so out is held at VCM and cannot rail. With a balanced first stage V(n2) ~ V(n1), so
+* VGS(XM7) ~ VGS(XM3): set by Ia and (W/L)3 only; XM7's capability current is Ia*[(W/L)7/(W/L)3] and
+* Rm = [(W/L)7/(W/L)3]*(Ia/Is). The loop forces I(XM7) = I(XM6) = Is by shifting XM7's gate drive (derived
+* stage_balance.gain_device_gate_drive_shift_mV); shift/A1 is the systematic input offset. Lowering Rm: reduce (W/L)7, raise
+* N_STAGE2_BIAS, reduce N_TAIL, raise (W/L)3. IBIAS scales all currents; Rm is unchanged. CC and R_RZ do not affect DC.
+* [Baseline observed, loop closed] 5 of 8 devices fail: XM1/XM2/XM3/XM4 are in weak inversion (0.56 uA, overdrive -0.10 V) because the
+* PMOS pair cannot reach Vsg = |Vth| at VCM = 0.9 V, and the PMOS tail XM5 has Vds = 7 mV (triode); the second stage carries its
+* 20 uA regardless. Input pair: V(tail) = 0.9 V + |Vgs| must stay below VDD - |VDSAT_tail| (about 1.65 V), so |Vth| above ~0.75 V cannot
+* work at VDD = 1.8 V. Measured |Vth| of this PDK's pfet_01v8 (W = 100 um, Vsb = 0.1 V): 0.68 V at L = 0.15 um, 0.95 V at 0.25 um, 1.02 V at 0.5 um. Use L_IN (and L_BIAS_P, which also sets the tail) at or very near 0.15 um.
 * [GAIN / COMPENSATION] Same relations as any series-R Miller two-stage:
 * A0 ~ A1*A2, A1 ~ gm1/(gds1+gds4), A2 ~ gm7/(gds7+gds6); UGB ~ gm1/(2*pi*CC); p2 ~ gm7/CL;
-* series R = RSH_RZ*L_RZ/W_RZ; zero s_z = 1/[CC*(1/gm7 - R)] (R < 1/gm7 -> RHP, R > 1/gm7 -> LHP).
-* Start with R of a few kohm (W_RZ small, L_RZ large) once DC passes, then trim CC for UGB / PM.
+* series R = R_RZ; zero s_z = 1/[CC*(1/gm7 - R)] (R < 1/gm7 -> RHP, R > 1/gm7 -> LHP).
+* Start with R_RZ of a few kohm once DC passes, then trim CC for UGB / PM.
 * PMOS gm1 per current is lower than NMOS: expect to need more tail current (N_TAIL, IBIAS) or smaller CC for UGB.
 * Power P ~ VDD*(IBIAS + I(XM5) + I(XM6)); limit is in target.json.
 *
-* Tunable parameters: the .param lines annotated "; tune MIN..MAX [UNIT] [int]" (everything else is fixed).
 * Matched PMOS input pair
 .param W_IN=10          ; tune 1..100 um
 .param L_IN=0.5         ; tune 0.15..2 um
@@ -76,10 +82,8 @@
 .param IBIAS=20u        ; tune 1u..100u A
 .param CC=1p            ; tune 0.1p..10p F
 
-* Series resistor R = RSH_RZ*L_RZ/W_RZ (ideal geometry resistor)
-.param RSH_RZ=100   ; fixed
-.param L_RZ=10          ; tune 0.5..100 um
-.param W_RZ=1           ; tune 0.5..10 um
+* Series resistor value (ideal resistor)
+.param R_RZ=1000        ; tune 100..20k ohm
 
 * Integer mirror ratios
 .param N_TAIL=1         ; tune 1..20 int
@@ -106,4 +110,4 @@ XM6 out vbias_p vdd vdd sky130_fd_pr__pfet_01v8
 XM7 out n2 0 0 sky130_fd_pr__nfet_01v8
 + W={W_STAGE2} L={L_STAGE2}
 CCOMP n2 ncomp {CC}
-RCOMP ncomp out {RSH_RZ*L_RZ/W_RZ}
+RCOMP ncomp out {R_RZ}

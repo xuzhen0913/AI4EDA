@@ -47,9 +47,21 @@ def dc_check(diagnostics, target):
         devices[name]={'passed':all(checks.values()),'checks':checks,'id_a':abs(op['id']),
             'vgs_or_vsg_v':vgs,'vds_or_vsd_v':vds,'vth_magnitude_v':abs(op['vth']),
             'vdsat_magnitude_v':abs(op['vdsat']),'overdrive_v':overdrive,'saturation_margin_v':margin}
-    return {'passed':bool(devices) and all(v['passed'] for v in devices.values()),
-            'failed_devices':[k for k,v in devices.items() if not v['passed']], 'devices':devices,
-            'criterion':'Forward orientation, |Id| >= minimum, VGS/VSG-|Vth| >= minimum, VDS/VSD-|VDSAT| >= minimum'}
+    loop=loop_check(diagnostics,target)
+    return {'passed':bool(devices) and all(v['passed'] for v in devices.values()) and loop['passed'],
+            'failed_devices':[k for k,v in devices.items() if not v['passed']], 'devices':devices, 'loop':loop,
+            'criterion':'Forward orientation, |Id| >= minimum, VGS/VSG-|Vth| >= minimum, VDS/VSD-|VDSAT| >= minimum; '
+                        'the closed loop holds out at VCM'}
+
+
+def loop_check(diagnostics, target):
+    """The operating point is closed-loop: the output must rest at VCM. If it does not, the loop is not regulating
+    (positive feedback because of a wrong feedback input, or a saturated stage)."""
+    window=target['dc_acceptance'].get('maximum_output_error_v')
+    if window is None:return {'passed':True,'output_error_v':None,'maximum_output_error_v':None}
+    out=diagnostics.get('v(out)')
+    error=None if out is None or not math.isfinite(out) else out-target['conditions']['input_common_mode_v']
+    return {'passed':error is not None and abs(error)<=window,'output_error_v':error,'maximum_output_error_v':window}
 
 
 def parse_log(text, returncode, target, mode='full'):
@@ -62,15 +74,21 @@ def parse_log(text, returncode, target, mode='full'):
     warnings = [l for l in text.splitlines() if 'warning' in l.lower()]
     required = metrics.values() if mode=='full' else [values.get('power_w')]+list(diagnostics.values())
     valid = returncode == 0 and not issues and bool(diagnostics) and all(v is not None and math.isfinite(v) for v in required)
-    # Sign normalization is valid only when the expected low-frequency loop polarity holds.
+    # The loop gain is T=-V(out)/V(injected) with the loop closed through the declared feedback input. Its low-frequency
+    # value is positive for negative feedback; a negative or zero value means the declared input is the wrong one
+    # (positive feedback) or that the gain is zero.
     ac_policy=target.get('ac_validation',{})
     polarity=values.get(LOOP_POLARITY)
     polarity_ok=None
     if mode=='full' and ac_policy.get('require_positive_loop_real_lf'):
         polarity_ok=polarity is not None and math.isfinite(polarity) and polarity>0
         if not polarity_ok:
-            issues.append('Invalid or missing normalized low-frequency loop polarity')
+            issues.append('Loop gain is not positive at low frequency: the feedback is not negative (wrong feedback input) or the gain is zero')
             valid=False
+    low=metrics.get('dc_gain_db')
+    if mode=='full' and low is not None and math.isfinite(low) and low<0:
+        issues.append('Loop gain is below 0 dB at the lowest frequency: there is no unity-gain crossing (zero gain or a dead circuit)')
+        valid=False
     dc=dc_check(diagnostics,target)
     # AC measurement/polarity errors must not relabel a passing DC operating point.
     dc_text=text.split('END_DC_OPERATING_POINT',1)[0]
@@ -84,7 +102,8 @@ def parse_log(text, returncode, target, mode='full'):
         for op,limit in target['targets'][k].items())) for k,v in metrics.items()}
     return {'analysis_mode':mode,'metrics':metrics,'dc_operating_point':diagnostics,'simulation_valid':valid,
             'dc_acceptance':dc,'dc_passed':dc['passed'],'dc_numerical_valid':dc_numerical_valid,
-            'ac_polarity':{'loop_real_lf':polarity,'passed':polarity_ok},
+            'ac_polarity':{'loop_real_lf':polarity,'passed':polarity_ok,'feedback_input':target.get('feedback_input')},
+            'bias':'closed_loop',
             'warnings':warnings,'errors':issues,'return_code':returncode,'checks':checks,
             'all_targets_passed':mode=='full' and valid and dc['passed'] and all(checks.values())}
 
@@ -106,7 +125,7 @@ class NgspiceRunner:
         digest=hashlib.sha256(original.encode()).hexdigest()
         if mode=='full' and self.dc_approved_hash!=digest:
             raise ValueError('Full simulation requires a passing DC check for this exact candidate')
-        source=deck(original,self.target,self.library,mode)
+        source=deck(original,self.target,self.library,mode,self.target['feedback_input'])
         number = self.next_number
         self.next_number += 1
         self.count += 1

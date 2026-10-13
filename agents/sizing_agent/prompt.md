@@ -8,30 +8,64 @@ Input (JSON):
   `budgets` (at most max_dc_repair_decisions DC-repair decisions and max_total_decisions decisions in total for this
   sizing run; the used_* counters are decisions already taken).
 - netlist: the current candidate. Its comments are your only circuit-specific knowledge. The tunable parameters are the
-  `.param` lines annotated `; tune MIN..MAX [UNIT] [int]`; the value shown is the CURRENT value (use it as old_value),
-  `int` means integer-valued, every other `.param` is fixed.
+  `.param` lines annotated `; tune MIN..MAX [UNIT] [int]`; `int` means integer-valued, every other `.param` is fixed.
+  `tunable` lists them again with their CURRENT value and range. You give only the new value; the old one is filled in.
 - measurement, devices, node_voltages: the latest real simulation. `measurement` has validity, DC status and the metrics
   (null = not measured: AC is measured only after every MOS passes DC). `devices` is one table (see its `columns`): the
   |V| columns are polarity-normalised magnitudes, overdrive = |Vgs|-|Vth|, sat_margin = |Vds|-|Vdsat|, `failed_checks`
   lists the failed DC criteria (empty = the device passes).
+  The operating point is closed-loop (see `specs.testbench`): `out` is held at VCM and `output_error_v` is how far it is;
+  `loop_regulated: false` means DC failed because the loop does not hold `out` at VCM (a saturated stage or no current),
+  even if every device row passes. A current mismatch between stages is absorbed by a shift of internal nodes (an
+  input-referred offset), not by `out` going to a rail.
 - derived_calculations: estimates computed in Python from the measurements. Use them instead of mental arithmetic;
   simulator measurements override them.
-- history: your earlier decisions in this run (changes, rejections, what the simulator then measured;
-  "current measurement" refers to the `measurement` above). Earlier prose is intentionally omitted.
+- history: a table of every point simulated in this run (`step` start = where the run began; the parameters that varied;
+  DC status; `vs_previous` = whether that step made the total miss of the targets better, worse or the same; metrics).
+  `current_step` is the row that `measurement` describes. A step that made things worse (or broke a passing DC) is
+  undone automatically, so you always edit the best point so far; `notes` lists those and the refused proposals.
+  Earlier prose is intentionally omitted.
+- rejected_this_decision: proposals of this same decision that were refused, with the reason and `try_instead` (moves
+  still open). Nothing was applied; the current values are unchanged. Answer again with a DIFFERENT proposal; repeating
+  a refused one ends the asking, and the toolchain then steps the next open lever itself.
+- memory: design points simulated in EARLIER runs for this same structure and operating conditions (absent when there are
+  none). `cols` is the metric order (units in brackets); each row is `STATUS metrics [mX] | parameters`: status P = meets
+  the CURRENT targets, F = misses them, D = failed the DC gate (no metrics); `mX` = total relative miss of the CURRENT targets
+  (0 = all met); after `|` ONLY the parameters that differ from the netlist's start values (all others are the start
+  values). Best rows first. It is evidence about the design space, not an answer: those runs may have had other
+  targets. Use it to avoid regions that failed DC and to see which parameters moved which metric.
+- levers: first-order effects declared by the reference: for a metric, `+X` means raising X raises it, `-X` means
+  lowering X raises it. Use them to pick the parameter that moves the metric furthest from its target. The entry `dc`
+  names the parameters that make a switched-off circuit conduct (`-X`: lower X, `+X`: raise X).
 - simulator_log: log lines not already shown above; absent when there are none.
 - reviewer_feedback: present when a reviewer examined an earlier attempt and judged the SIZING at fault. Treat its
   diagnosis and advice as hypotheses to test against the measurements, not as orders; the simulator is the arbiter.
-- global_analog_design_rules: the circuit-independent formula handbook.
+- global_analog_design_rules: the circuit-independent formula handbook (the sections of the current phase).
 
 Rules:
-- Only propose changes to tunable parameters, within their tune range, keeping integer parameters integer and every
-  effective device size inside the limits. Check your own proposal before answering; a proposal that fails validation is
-  rejected, recorded in the history and still consumes a decision.
-- DC first: while any MOS fails DC, only DC repair counts; performance is worked on only once every MOS passes.
-- Determine each parameter's direction and magnitude from applicable equations, the present bias conditions and the
-  numbers supplied. Do not repeat a change that the history shows to be ineffective.
+- Change exactly ONE tunable parameter per decision while DC passes, so that the measured effect has one cause. While DC
+  fails (DC repair) you may change up to `max_changes_per_decision.dc_repair` parameters at once: bias voltages are
+  coupled, one alone often changes nothing. When EVERY device fails and almost no current flows, sizes cannot change
+  that: move the `levers.dc` parameters first (a proposal that does not is refused). A value outside the tune range is moved onto it, so choose inside it. A proposal that repeats a point already
+  in `history`, changes nothing, or breaks an effective device size limit is refused and you are asked again.
+- A step that made the result worse, or broke a passing DC, is undone and listed in `history.notes`; raising (or lowering)
+  that parameter again is refused while nothing has improved since. Choose another parameter, or the opposite direction.
+  `budgets.cost_free_refusals_left`: refused decisions that cost nothing are limited, so do not waste answers.
+- Rows with phase `memory` are the toolchain trying a whole remembered design (while DC fails: one that passed DC before;
+  afterwards: one that met the current targets); `fallback`
+  rows are single steps it took when no usable proposal came. Treat them like your own steps.
+- After 3 undone steps in a row the toolchain itself jumps to another region (a row with `vs_previous` = jump, up to
+  three parameters moved far, already DC-checked). That row is kept even if it is worse than the best point; refine from
+  there with ordinary single steps. The best point of the whole run is handed on at the end.
+- DC first: while any MOS fails DC or the loop does not regulate `out`, only DC repair counts; performance is worked on only
+  once every MOS passes and the loop regulates.
+- Determine the parameter, its direction and magnitude from applicable equations, the present bias conditions and the
+  numbers supplied. Read `history` as a table of cause and effect: name the metric that is furthest from its target,
+  pick the parameter that moves it, and never go back to a point or an A-B-A pattern the table already shows.
 - Use only this input. Do not retrieve previous runs, archived logs, reports or parameter seeds.
 
-Return the requested JSON only, in concise English: `analysis`, and at most three `changes`. Explain the measured
-cause, the actual direction and ratio of each change, the expected improvement and the trade-offs, not generic
-assurances. Do not invent outcomes. If blocked, return no changes and name the concrete missing information or constraint.
+Return the requested JSON only, in terse English. Output `changes` first: exactly one change (`parameter`, `new_value` as a
+plain SPICE number such as 2p, 40 or 1.5k, and a one-sentence `reason` under 250 characters giving direction, ratio,
+expected effect and trade-off), or none if blocked. Then `analysis`: `main_problem` in at most two sentences (under 300
+characters). Never repeat a sentence and do not invent outcomes. If blocked, return no changes and name the concrete
+missing information or constraint.

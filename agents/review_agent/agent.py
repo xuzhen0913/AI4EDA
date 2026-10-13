@@ -2,27 +2,16 @@
 import math
 from pathlib import Path
 from analog_agents.analog_calc import derive
-from analog_agents.evidence import device_table, measurement_summary, node_voltages, outcome, residual_log, sig
-from analog_agents.schema import obj, enum, TEXT, BOOL
+from analog_agents.evidence import device_table, measurement_summary, node_voltages, residual_log, sig
+from analog_agents import memory as design_memory
+from analog_agents.schema import obj, enum
+from analog_agents.search import advice, diagnosis, history_table, move_text, open_moves, spec_check  # spec_check lives in search; re-exported here
 from analog_agents.spice import number, parameters
 from simulator.testbench import describe
 
 VERDICTS = ['pass', 'fail_topology', 'fail_sizing']
-SCHEMA = obj({'verdict': enum(VERDICTS), 'diagnosis': TEXT, 'revision_advice': TEXT,
-              'restart_sizing_from_reference': BOOL})
-
-
-def spec_check(targets, metrics):
-    """Exact comparison of measured metrics with targets; None means not measured."""
-    rows = {}
-    for name, limits in targets.items():
-        value = metrics.get(name)
-        ok = None if value is None or not math.isfinite(value) else all(
-            value >= limit if op == 'min' else value <= limit for op, limit in limits.items())
-        margin = None if ok is None else {op: sig(value - limit if op == 'min' else limit - value)
-                                          for op, limit in limits.items()}
-        rows[name] = dict(target=limits, value=sig(value), passed=ok, margin=margin)
-    return rows
+# Only the verdict is the model's judgement; diagnosis and revision advice are built from the evidence by Python.
+SCHEMA = obj({'verdict': enum(VERDICTS)})
 
 
 def parameter_table(candidate, bounds):
@@ -38,22 +27,6 @@ def parameter_table(candidate, bounds):
     return {'columns': ['parameter', 'value', 'min', 'max', 'unit', 'on_bound'], 'rows': rows}
 
 
-def history_for_review(history):
-    """Every decision with the sizing agent's stated reason and what the simulator then measured."""
-    rows = []
-    for row in history:
-        item = dict(iteration=row['iteration'], phase=row['phase'], diagnosis=row['analysis']['main_problem'],
-                    changes=[{k: c[k] for k in ('parameter', 'old_value', 'new_value', 'reason')} for c in row['changes']])
-        if 'before' in row:
-            item['before'] = outcome(row['before'])
-        if row.get('validation_error'):
-            item['rejected'] = row['validation_error']
-        if 'result' in row:
-            item['result'] = outcome(row['result'])
-        rows.append(item)
-    return rows
-
-
 def build_evidence(n, max_rounds, specs, reference, target, summary, history, measurement, candidate, earlier):
     """Everything the review agent sees, each fact once."""
     checks = spec_check(specs['targets'], measurement['metrics'])
@@ -61,7 +34,7 @@ def build_evidence(n, max_rounds, specs, reference, target, summary, history, me
     kinds = {k: d['kind'] for k, d in target['dc_acceptance']['devices'].items()}
     evidence = dict(
         round=n, max_rounds=max_rounds,
-        testbench=describe(specs),
+        testbench=describe(specs, target.get('feedback_input')),
         spec_check=checks,
         topology=dict(id=reference.id, profile=reference.profile),
         final=measurement_summary(measurement, metrics=False),
@@ -71,7 +44,9 @@ def build_evidence(n, max_rounds, specs, reference, target, summary, history, me
         sizing=dict(status=summary['status'], decisions=summary['iteration_count'],
                     dc_repair_decisions=summary['dc_iteration_count'], simulations=summary['simulation_count'],
                     max_decisions=summary['max_iterations'], max_dc_repair_decisions=summary['max_dc_iterations']),
-        sizing_history=history_for_review(history),
+        sizing_history=history_table(history),
+        open_moves=move_text(open_moves(target.get('levers'), specs['targets'], measurement['metrics'], history, set(),
+                                         target['optimization']['allowed_parameters'])),
         earlier_rounds=earlier)
     log = residual_log(Path(measurement['log']).read_text(), measurement)
     if log:
@@ -88,15 +63,26 @@ class ReviewAgent:
 
     def review(self, evidence):
         reply = self.client.ask(self.prompt, evidence, SCHEMA, agent_name=self.name)
-        if reply['verdict'] == 'pass':
-            reply['revision_advice'], reply['restart_sizing_from_reference'] = '', False
-        elif not reply['revision_advice'].strip():
-            raise ValueError('A failing verdict must come with revision advice')
+        reply['diagnosis'] = diagnosis(evidence)
+        reply['revision_advice'] = '' if reply['verdict'] == 'pass' else advice(evidence)
+        reply['restart_sizing_from_reference'] = False  # the next round continues from the best point found
         reply['reviewer_verdict'] = reply['verdict']
         numbers_pass = (all(v['passed'] is True for v in evidence['spec_check'].values())
                         and evidence['final']['simulation_valid'] and evidence['final']['dc_passed'])
         if reply['verdict'] == 'pass' and not numbers_pass:
-            failing = ', '.join(k for k, v in evidence['spec_check'].items() if v['passed'] is not True) or 'simulation validity'
-            reply.update(verdict='fail_sizing', revision_advice='Failing or unmeasured: ' + failing,
+            reply.update(verdict='fail_sizing', revision_advice=advice(evidence),
                          verdict_overridden='Reviewer said pass but the numeric check fails; treated as fail_sizing.')
         return reply
+
+    def remember(self, path, circuit, reference, specs, history):
+        """Store this round's simulated points (successes and failures) in the design memory file.
+
+        Near-duplicates of points already stored for the same reference are dropped and the per-reference cap is
+        applied by `analog_agents.memory.add`. Returns how many points the reference's section holds afterwards."""
+        memory = design_memory.load(path)
+        points = [(design_memory.classify(p['dc_passed'], spec_check(specs['targets'], p['metrics'])), p['metrics'], p['point'])
+                  for p in design_memory.history_points(history)]
+        kept = design_memory.add(memory, (circuit, reference.id, design_memory.condition_key(specs)), reference,
+                                 specs['targets'], points)
+        design_memory.save(memory, path)
+        return kept

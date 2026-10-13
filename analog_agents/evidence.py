@@ -24,14 +24,22 @@ def sig(value, digits=5):
 
 def outcome(r):
     """What a past decision led to: DC status and metrics (a stored history row's `result` or `before`)."""
-    return dict(dc_passed=r['dc_passed'], failed_dc_devices=r['failed_dc_devices'],
+    item = dict(dc_passed=r['dc_passed'], failed_dc_devices=r['failed_dc_devices'],
                 metrics={k: sig(v) for k, v in r['metrics'].items()})
+    if r.get('loop_regulated') is False:
+        item['loop_regulated'] = False
+    return item
 
 
 def measurement_summary(m, metrics=True):
-    """Validity and metrics of the latest simulation. Failed devices are in the device table, not repeated here.
+    """Validity, loop regulation and metrics of the latest simulation. Failed devices are in the device table.
     The review agent passes metrics=False: its spec_check already carries every value and verdict."""
     summary = dict(analysis=m['analysis_mode'], simulation_valid=m['simulation_valid'], dc_passed=m['dc_passed'])
+    loop = m['dc_acceptance'].get('loop') or {}
+    if loop.get('output_error_v') is not None:  # the closed loop must hold out at VCM; this is how far it is from it
+        summary['output_error_v'] = sig(loop['output_error_v'])
+        if not loop['passed']:
+            summary['loop_regulated'] = False
     if metrics:
         summary.update(metrics={k: sig(v) for k, v in m['metrics'].items()},
                        failed_metrics=[k for k, v in m['checks'].items() if v is False])
@@ -39,9 +47,6 @@ def measurement_summary(m, metrics=True):
         summary['errors'] = m['errors']
     if m['warnings']:
         summary['warnings'] = m['warnings']
-    polarity = m.get('ac_polarity') or {}
-    if polarity.get('passed') is False:
-        summary['ac_polarity_invalid'] = polarity.get('loop_real_lf')
     return summary
 
 

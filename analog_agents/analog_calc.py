@@ -79,7 +79,7 @@ def stack_resistance(stack, prop):
 
     An item is a device name, or a list of names in parallel (a node loaded by several
     devices). r = 1/gds; each device above adds r + R_below + gm*r*R_below.
-    Returns None if any needed gm/gds is missing.
+    The body transconductance gmb is ignored (slightly pessimistic). Returns None if any needed gm/gds is missing.
     """
     below = None
     for item in reversed(stack):
@@ -143,9 +143,12 @@ def derive(target, params, measurements):
             g, s, a = spec['gain_device'], spec['bias_device'], spec['mirror_reference_device']
             if all(table.get(d) for d in (g, s, a)):
                 i_a, i_s = table[a]['id_uA'], table[s]['id_uA']
+                # The loop holds out at VCM, so a current mismatch shows up as the gain device needing a different gate
+                # drive than the mirror reference (the input-referred systematic offset is this shift over the first-stage gain).
+                shift = abs(prop(g, 'vgs')) - abs(prop(a, 'vgs'))
                 out['stage_balance'] = {
                     'Rm': _round(mirror_ratio_mismatch(wl(g), wl(a), i_a, i_s)), 'Ia_uA': i_a, 'Is_uA': i_s,
-                    'output_node_v': _round(op.get('v(out)')),
+                    'gain_device_gate_drive_shift_mV': _round(shift * 1e3),
                     'target_W_over_L_of_gain_device_for_Rm_1': _round(target_wl_for_balance(wl(a), i_a, i_s))}
         elif kind == 'miller_compensation':
             g, s, inp = spec['gain_device'], spec['bias_device'], spec['input_device']
@@ -164,7 +167,7 @@ def derive(target, params, measurements):
             comp = {'inv_gm_gain_device_ohm': _round(1 / gm2)}
             cl = conditions.get(spec.get('load_capacitance_condition', ''))
             if cl:
-                comp['p2_approx_gm2_over_2pi_CL_MHz'] = _round(gm2 / (2 * math.pi * cl) / 1e6)
+                comp['p2_upper_bound_gm2_over_2pi_CL_MHz'] = _round(gm2 / (2 * math.pi * cl) / 1e6)  # ignores parasitic C at out
             if table.get(inp) and cc:
                 gm1 = table[inp]['gm_uS'] * 1e-6
                 comp['ugb_approx_gm1_over_2pi_CC_MHz'] = _round(unity_gain_hz(gm1, cc) / 1e6)
@@ -196,8 +199,14 @@ def derive(target, params, measurements):
                 stage['Rout_total_kohm'] = _round(rout / 1e3)
                 stage['A0_estimate_dB_gm1_times_Rout'] = _round(db(gm1 * rout))
             cl = conditions.get(spec.get('load_capacitance_condition', ''))
-            if cl:
-                stage['ugb_approx_gm1_over_2pi_CL_MHz'] = _round(unity_gain_hz(gm1, cl) / 1e6)
+            if cl:  # an upper bound: the real output capacitance is CL plus the parasitics of the devices at out
+                stage['ugb_upper_bound_gm1_over_2pi_CL_MHz'] = _round(unity_gain_hz(gm1, cl) / 1e6)
+            ugb = (measurements.get('metrics') or {}).get('ugb_hz')
+            if ugb and gm1:
+                c_eff = gm1 / (2 * math.pi * ugb)
+                stage['effective_output_C_pF_from_measured_ugb'] = _round(c_eff * 1e12)
+                if cl:
+                    stage['parasitic_C_pF'] = _round((c_eff - cl) * 1e12)
             out['cascode_stage'] = stage
     metrics = measurements.get('metrics', {})
     power = metrics.get('power_w')

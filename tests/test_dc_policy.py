@@ -62,9 +62,9 @@ def test_product_width_is_bounded_and_shared_lengths_are_locked():
 
 def test_dc_deck_has_no_ac_and_full_requires_certificate(tmp_path):
     library='/lib/sky130.lib.spice'
-    dc=deck(REF,TARGET,library,'dc')
+    dc=deck(REF,TARGET,library,'dc',TARGET['feedback_input'])
     assert '\nac ' not in dc and 'meas ac' not in dc and '\nop\n' in dc and 'print v(out)' in dc
-    assert 'ac dec 100 1 1000000000' in deck(REF,TARGET,library,'full')
+    assert 'ac dec 100 1 1000000000' in deck(REF,TARGET,library,'full',TARGET['feedback_input'])
     p=tmp_path/'candidate.spice';p.write_text(REF)
     runner=NgspiceRunner(tmp_path,TARGET)
     with pytest.raises(ValueError,match='passing DC'):runner.run(p,mode='full')
@@ -154,18 +154,24 @@ def test_one_command_does_not_stop_preexisting_service(tmp_path,monkeypatch):
     assert actions==[] and state.exists()
 
 
-def test_rejected_stale_proposal_preserves_candidate_and_consumes_budget(tmp_path):
+def test_rejected_proposal_preserves_candidate_is_re_asked_and_only_costs_budget_after_the_free_allowance(tmp_path):
     class StaleAgent(AgentFixture):
+        asked=0
         def run(self,*args,**kwargs):
+            StaleAgent.asked+=1
             reply=super().run(*args,**kwargs)
-            reply['changes']=[dict(parameter='W_IN',old_value='99',new_value='12',reason='invalid unit fixture')]
+            reply['changes']=[dict(parameter='N_TAIL',new_value='20',reason='product width out of range fixture')]
             return reply
     candidate=tmp_path/'candidate.spice';candidate.write_text(REF)
     history=[];state={'dc_iterations':0};runner=RunnerFixture(tmp_path,[False]*6)
     status=optimize(runner,StaleAgent(),candidate,REF,TARGET,tmp_path,history,state)
-    assert status=='dc_iteration_limit' and len(history)==5
+    free=[x for x in history if x.get('free')]
+    assert status=='dc_iteration_limit' and len(history)==8 and len(free)==3 and history[:3]==free   # 3 refusals cost nothing
+    assert state['dc_iterations']==5 and runner.n==1                                                # nothing was re-simulated
     assert candidate.read_text()==REF and all(not x['accepted'] for x in history)
-    assert all('old_value' in x['validation_error'] for x in history)
+    assert all('outside its limit' in x['validation_error'] for x in history)
+    assert all(len(x['rejected_attempts'])==1 for x in history) and StaleAgent.asked==16   # the repeat ends the asking: 2 asks per decision
+    assert all(x['changes'][0]['old_value']=='1' for x in history)                         # the old value is filled in by the loop
 
 
 def test_pmos_stage_terminal_policy_and_removed_parameters():
@@ -205,11 +211,62 @@ def test_ac_polarity_failure_does_not_invalidate_passing_dc():
 
 
 def test_testbench_conventions_are_generated_not_copied():
-    text=deck(REF,TARGET,'/lib/sky130.lib.spice','full')
-    for line in ('let differential_gain = v(out)/differential_input','let differential_input = v(vinp)-v(vinn)',
-                 'let loop_gain = -differential_gain','let gain = db(differential_gain)',
-                 'let loop_phase_deg = 180/PI*cph(loop_gain)','let power_w = -i(VSUPPLY)*v(vdd)',
-                 'VINP vinp 0 DC {VCM} AC 0.5','VINN vinn 0 DC {VCM} AC -0.5','CLOAD_OUT out 0 {CLOAD}',
+    text=deck(REF,TARGET,'/lib/sky130.lib.spice','full',TARGET['feedback_input'])
+    for line in ('let loop_gain = -v(out)/v(acin)','let gain = db(loop_gain)','let loop_phase_deg = 180/PI*cph(loop_gain)',
+                 'let power_w = -i(VSUPPLY)*v(vdd)','VINN vinn 0 DC {VCM}','CLOAD_OUT out 0 {CLOAD}',
                  '.lib "/lib/sky130.lib.spice" tt','.temp 27','.param VDD=1.8','.param VCM=0.9','.param CLOAD=2e-12'):
         assert line in text.splitlines(),line
-    assert 'IBIAS_P ' not in text
+    assert 'IBIAS_P ' not in text and 'differential_gain' not in text   # no assumption about which way the circuit inverts
+
+
+def test_closed_loop_must_hold_the_output_at_vcm():
+    """With the loop closed a healthy amplifier sits at VCM; anything else means no regulation (wrong feedback input,
+    a saturated stage, or no current), which is a DC failure even when every device row passes."""
+    op=diagnostics()
+    ok=dc_check(op,TARGET);assert ok['passed'] and ok['loop']['passed'] and ok['loop']['output_error_v']==pytest.approx(0)
+    for out in (1.79,0.01,0.9501,0.8499):
+        op=diagnostics();op['v(out)']=out
+        bad=dc_check(op,TARGET)['loop']
+        assert not bad['passed'] and bad['output_error_v']==pytest.approx(out-0.9) and bad['maximum_output_error_v']==0.05
+    op=diagnostics();op['v(out)']=0.94;assert dc_check(op,TARGET)['loop']['passed']
+    op=diagnostics();del op['v(out)'];assert not dc_check(op,TARGET)['loop']['passed']
+    # a dc_acceptance without the window (a generic target) is not subject to the check
+    generic=json_copy(TARGET);del generic['dc_acceptance']['maximum_output_error_v']
+    op=diagnostics();op['v(out)']=1.7;assert dc_check(op,generic)['loop']['passed']
+
+
+def json_copy(value):
+    import json
+    return json.loads(json.dumps(value))
+
+
+def test_a_loop_that_does_not_regulate_fails_dc_in_the_parsed_record():
+    text='\n'.join(f'{k} = {v}' for k,v in {**diagnostics(),'v(out)':1.7}.items())+'\npower_w = 0.0001\nEND_DC_OPERATING_POINT\n'
+    result=parse_log(text,0,TARGET,'dc')
+    assert not result['dc_passed'] and result['dc_acceptance']['failed_devices']==[] and not result['dc_acceptance']['loop']['passed']
+
+
+def test_record_carries_the_declared_feedback_input_and_the_bias_mode():
+    base='\n'.join(f'{k} = {v}' for k,v in diagnostics().items())+'\npower_w = 0.0001\nEND_DC_OPERATING_POINT\n'
+    base+='dc_gain_db = 70\nugb_hz = 2e7\nphase_margin_deg = 70\nloop_real_lf = 1000\n'
+    result=parse_log(base,0,TARGET,'full')
+    assert result['bias']=='closed_loop' and result['ac_polarity']['feedback_input']==TARGET['feedback_input']=='vinp'
+    assert result['all_targets_passed']
+    negative=parse_log(base.replace('loop_real_lf = 1000','loop_real_lf = -1000'),0,TARGET,'full')
+    assert not negative['simulation_valid'] and any('wrong feedback input' in e for e in negative['errors'])
+
+
+def test_loop_failure_with_every_device_fine_is_visible_in_the_history(tmp_path):
+    from analog_agents.search import history_table
+    class LoopRunner(RunnerFixture):
+        def run(self,candidate,mode):
+            m=super().run(candidate,mode)
+            if not m['dc_passed']:m['dc_acceptance']={'failed_devices':[],'loop':{'passed':False,'output_error_v':0.6,'maximum_output_error_v':0.05}}
+            return m
+    candidate=tmp_path/'candidate.spice';candidate.write_text(REF)
+    runner=LoopRunner(tmp_path,[False]+[True]*11);state={'dc_iterations':0};history=[]
+    optimize(runner,AgentFixture(),candidate,REF,TARGET,tmp_path,history,state)
+    assert history[0]['before']['loop_regulated'] is False and history[0]['before']['failed_dc_devices']==[]
+    assert history[0]['result']['dc_passed'] and 'loop_regulated' not in history[0]['result']
+    table=history_table(history)
+    assert table['rows'][0][0]=='start' and 'loop does not hold out' in table['rows'][0][table['columns'].index('dc')]

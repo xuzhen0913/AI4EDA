@@ -14,13 +14,16 @@ from agents.review_agent.agent import ReviewAgent, build_evidence, spec_check
 from agents.sizing_agent.agent import SizingAgent, check_library, validate_candidate
 from agents.sizing_agent.loop import optimize
 from agents.topology_agent.agent import TopologyAgent
+from analog_agents import memory as design_memory
 from analog_agents.config import ROOT
 from analog_agents.factory import backend, new_client
 from analog_agents.reference import design_target, load_references
+from analog_agents.search import charged
 from simulator.ngspice_runner import NgspiceRunner, save
 from simulator.report_generator import generate
 
 BASE = ROOT/'circuits/opamp'
+MEMORY = design_memory.PATH   # design points of earlier runs: written by the review agent, read by topology and sizing
 KEEP = ('run.lock', 'runs')
 BACKENDS = {'claude': 'claude_cli', 'codex': 'codex_cli', 'qwen': 'local_qwen'}
 
@@ -56,7 +59,7 @@ def round_digest(entry):
                                       'failed_dc_devices', 'failed_specs', 'verdict', 'diagnosis', 'revision_advice')}
 
 
-def sizing_run(n, rdir, specs, reference, target, agent, start_text, feedback, baseline_only):
+def sizing_run(n, rdir, specs, reference, target, agent, start_text, feedback, baseline_only, memory_points=()):
     """One complete sizing run (or just the baseline simulation) on the selected reference."""
     candidate = rdir/'candidate.spice'
     candidate.write_text(start_text)
@@ -64,30 +67,33 @@ def sizing_run(n, rdir, specs, reference, target, agent, start_text, feedback, b
     runner = NgspiceRunner(rdir, target)
     history, state = [], {'dc_iterations': 0, 'measurement': None}
     save(rdir/'history.json', history)
+    first_call = len(agent.client.calls) if agent else 0  # the client keeps the calls of every round
     started = time.perf_counter()
     status, error = 'interrupted', None
     try:
         status = optimize(runner, agent, candidate, reference.text, target, rdir, history, state,
-                          baseline_only=baseline_only, feedback=feedback)
+                          baseline_only=baseline_only, feedback=feedback, memory_points=memory_points, seed=n)
     except (Exception, KeyboardInterrupt) as exc:
         error = f'{type(exc).__name__}: {exc}'
         print(error, flush=True)
     finally:
-        calls = agent.client.calls if agent else []
+        calls = agent.client.calls[first_call:] if agent else []
         save(rdir/'sizing_calls.json', calls)
         measurement = state['measurement']
         limits = target['optimization']
         summary = dict(status=status, error=error, round=n, reference=reference.id,
             initial_parameters={k: reference.initial[k] for k in reference.bounds},
-            iteration_count=len(history), dc_iteration_count=state['dc_iterations'],
-            performance_iteration_count=len(history)-state['dc_iterations'], simulation_count=runner.count,
+            iteration_count=len(charged(history)), dc_iteration_count=state['dc_iterations'],
+            performance_iteration_count=len(charged(history))-state['dc_iterations'],
+            cost_free_refusals=len(history)-len(charged(history)), simulation_count=runner.count,
             max_iterations=limits['max_iterations'], max_dc_iterations=limits['max_dc_iterations'],
             total_optimization_time_seconds=time.perf_counter()-started,
+            best_simulation_number=(state.get('best') or {}).get('simulation_number'),
             final_simulation_number=measurement['simulation_number'] if measurement else None,
             tokens=tokens(calls), token_usage_complete=all(c.get('usage') is not None for c in calls),
             call_count=len(calls))
         save(rdir/'summary.json', summary)
-    return summary, history, measurement
+    return summary, history, measurement, (state.get('best') or {}).get('text')
 
 
 def run(baseline_only=False, only_reference=None):
@@ -97,6 +103,10 @@ def run(baseline_only=False, only_reference=None):
     check_library(specs, references)
     if baseline_only and only_reference not in references:
         raise ValueError('--baseline-only needs --reference <id>; ids: '+', '.join(references))
+    if specs.get('reference_tags') and not baseline_only:   # optional: only structures carrying one of these tags are offered
+        references = {k: v for k, v in references.items() if set(v.tags) & set(specs['reference_tags'])}
+        if not references:
+            raise ValueError('specs.reference_tags matches no reference')
     selection = None if baseline_only else backend()
     max_rounds = 1 if baseline_only else specs['budgets']['max_rounds']
     results = BASE/'results'
@@ -109,7 +119,7 @@ def run(baseline_only=False, only_reference=None):
         TopologyAgent(clients['topology']), SizingAgent(clients['sizing']), ReviewAgent(clients['review']))
 
     rounds, excluded = [], []
-    reference, last_review, last_candidate = None, None, None
+    reference, last_review, best_candidate = None, None, None
     status, error = 'interrupted', None
     started = time.perf_counter()
     start_time = datetime.now(timezone.utc).isoformat()
@@ -124,12 +134,13 @@ def run(baseline_only=False, only_reference=None):
             elif n == 1 or last_review['verdict'] == 'fail_topology':
                 offered = [i for i in references if i not in excluded]
                 if offered:
+                    first_call = len(clients['topology'].calls)
                     choice = topology_agent.select(specs, references, excluded, [round_digest(r) for r in rounds] or None,
-                                                   last_review if n > 1 else None)
+                                                   design_memory.load(MEMORY), BASE.name)
                     reference = references[choice['selected_reference']]
                     entry['topology_agent_ran'] = True
                     save(rdir/'topology_selection.json', dict(offered=offered, excluded=excluded, **choice))
-                    save(rdir/'topology_calls.json', clients['topology'].calls)
+                    save(rdir/'topology_calls.json', clients['topology'].calls[first_call:])
                     print('  topology:', reference.id, flush=True)
                 else:  # nothing left to offer: keep sizing the last structure
                     last_review = dict(last_review, verdict='fail_sizing')
@@ -139,12 +150,16 @@ def run(baseline_only=False, only_reference=None):
             if n > 1 and last_review['verdict'] == 'fail_sizing':
                 feedback = {k: last_review[k] for k in ('diagnosis', 'revision_advice')}
                 entry['sizing_feedback_used'] = True
-                if not last_review['restart_sizing_from_reference']:
-                    start_text = last_candidate
-            summary, history, measurement = sizing_run(n, rdir, specs, reference, target, sizing_agent, start_text,
-                                                       feedback, baseline_only)
+                if best_candidate:  # continue from the best point the previous round found, not from where it ended
+                    start_text = best_candidate
+            remembered, memory_points = design_memory.load(MEMORY), []
+            if sizing_agent:
+                key = (BASE.name, reference.id, design_memory.condition_key(specs))
+                sizing_agent.memory = design_memory.view(remembered, *key, specs['targets'])
+                memory_points = design_memory.known_points(remembered, key, reference)
+            summary, history, measurement, best_candidate = sizing_run(n, rdir, specs, reference, target, sizing_agent, start_text,
+                                                       feedback, baseline_only, memory_points)
             candidate_text = (rdir/'candidate.spice').read_text()
-            last_candidate = candidate_text
             entry.update(reference=reference.id, sizing_status=summary['status'], decisions=summary['iteration_count'],
                          dc_decisions=summary['dc_iteration_count'], simulations=summary['simulation_count'])
             if summary['error'] or measurement is None:
@@ -160,10 +175,13 @@ def run(baseline_only=False, only_reference=None):
             if baseline_only:
                 status = 'baseline_only'
                 break
+            first_call = len(clients['review'].calls)
             review = review_agent.review(build_evidence(n, max_rounds, specs, reference, target, summary, history,
                                                         measurement, candidate_text, [round_digest(r) for r in rounds[:-1]]))
             save(rdir/'review.json', review)
-            save(rdir/'review_calls.json', clients['review'].calls)
+            stored = review_agent.remember(MEMORY, BASE.name, reference, specs, history)
+            print(f'  memory: {stored} points of {reference.id} stored in {MEMORY.name}', flush=True)
+            save(rdir/'review_calls.json', clients['review'].calls[first_call:])
             entry.update(verdict=review['verdict'], diagnosis=review['diagnosis'],
                          revision_advice=review['revision_advice'])
             last_review = review

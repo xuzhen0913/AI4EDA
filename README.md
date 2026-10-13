@@ -38,7 +38,7 @@ specs + 全部 reference 的 profile
 - **每次 sizing** 仍遵循原来的次数：先 DC，DC 修复累计最多 5 次（`max_dc_iterations`）；DC 通过后做性能优化，该次 sizing 总决策最多 10 次（`max_iterations`）。
   两种预算相互独立：流程 3 轮，每轮的 sizing 都可以用满 10 次，所以整个流程里 sizing 决策可以超过 3 次（最多 30 次）。
 - 第 1 轮必选拓扑。之后：审核判 `fail_topology` → 下一轮重新选拓扑（已被判失败的拓扑不再提供），sizing 从新 reference 的初始值开始；
-  审核判 `fail_sizing` → 下一轮拓扑不变，sizing 带着审核意见继续（默认从上一轮最终网表继续；审核认为该网表比初始更差时可设 `restart_sizing_from_reference` 从 reference 重来）。
+  审核判 `fail_sizing` → 下一轮拓扑不变，sizing 带着审核意见继续（从上一轮找到的**最优点**继续——DC 通过且对各指标总缺口最小的点，而不是上一轮停下的位置；上一轮没有任何 DC 通过的点则从 reference 重来）。
 - 审核结论以 Python 的逐项数值对比为准：审核 Agent 若说 `pass` 但有指标不达标，会被改判 `fail_sizing` 并在 `review.json` 记录；
   审核 Agent 若判 `fail_*`，必须给出非空的修改意见。
 - 三轮结束仍未通过则 `max_rounds_reached`，报告里照实记录每一轮。
@@ -78,9 +78,9 @@ bash scripts/run_all.sh --baseline-only --reference two_stage_nmos_input_pmos_st
 
 | 文件（id） | 结构 |
 |---|---|
-| `two_stage_nmos_input_pmos_stage2` | 两级 Miller 运放，NMOS 输入，PMOS 共源第二级（**已验证**可达标） |
-| `two_stage_pmos_input_nmos_stage2` | 两级 Miller 运放，PMOS 输入，NMOS 共源第二级（未验证） |
-| `folded_cascode_nmos_input` | 折叠式共源共栅，NMOS 输入（未验证） |
+| `two_stage_nmos_input_pmos_stage2` | 两级 Miller 运放，NMOS 输入，PMOS 共源第二级（**已验证**：已有两组设计分别达到 UGB 22 MHz 和 99 MHz） |
+| `two_stage_pmos_input_nmos_stage2` | 两级 Miller 运放，PMOS 输入，NMOS 共源第二级（未验证；VCM=0.9 V 下输入对需 L_IN≈0.15 µm） |
+| `folded_cascode_nmos_input` | 折叠式共源共栅，NMOS 输入（已有一个 DC/AC 有效点：增益 57.7 dB、UGB 51.6 MHz、PM 76.9°；尚未达到 80 MHz） |
 | `folded_cascode_pmos_input` | 折叠式共源共栅，PMOS 输入（未验证） |
 | `telescopic_cascode_nmos_input` | 套筒式共源共栅，NMOS 输入（未验证） |
 | `telescopic_cascode_pmos_input` | 套筒式共源共栅，PMOS 输入（未验证） |
@@ -89,18 +89,28 @@ reference 里**只有被测电路本身**，从上到下依次是：
 
 1. **`@profile-begin … @profile-end`**：结构、优点、缺点、适用/不适用场景、验证状态（含基线仿真观察）。拓扑选择 Agent 只能依据这段文字做选择，审核 Agent 也读它。
 2. **`@analyses-begin … @analyses-end`**（可选）：JSON 列表，声明该结构适用的预计算类型（电流平衡比、补偿零极点、cascode 堆栈输出电阻与增益估计），器件名只在这里出现。
-3. **NOTES 注释**：该电路专用的 DC 平衡关系、偏置关系、标定数据（sizing Agent 读）。
-4. **`.param` 与电路**。可调参数就是带 `; tune 下限..上限 [单位] [int]` 注解的 `.param` 行（例：`.param W_IN=10 ; tune 1..100 um`，`int` 表示整数），其余 `.param` 为固定常数。
+3. **`* @feedback-input: vinp|vinn`**：单位负反馈接回哪个输入端，即该电路的反相输入。输出随 `vinp` 升高而下降的（两级运放）写 `vinp`，上升的（折叠/套筒式单级运放）写 `vinn`。
+   这是拓扑属性，必须在求直流工作点之前就知道，所以放在 reference 里；写错了会在 AC 里被发现（环路增益低频为负，仿真判无效，并提示接错反馈端）。
+4. **NOTES 注释**：该电路专用的 DC 平衡关系、偏置关系、标定数据（sizing Agent 读）。
+5. **`.param` 与电路**。可调参数就是带 `; tune 下限..上限 [单位] [int]` 注解的 `.param` 行（例：`.param W_IN=10 ; tune 1..100 um`，`int` 表示整数），其余 `.param` 为固定常数。
    器件端点、模型、W/L 表达式、DC 检查要用的诊断名都**直接从网表解析**，不再另写一遍。
 
-**不在 reference 里的东西**（重复输入已删除）：供电/输入源/负载电容、`.lib`/`.temp`、DC 诊断 `print`、AC 分析与测量都由共享 testbench（`simulator/testbench.py`）
+**不在 reference 里的东西**（重复输入已删除）：供电/输入源/反馈环路/AC 源/负载电容、`.lib`/`.temp`、DC 诊断 `print`、AC 分析与测量都由共享 testbench（`simulator/testbench.py`）
 按 `target.json` 和电路自己的器件/节点生成，所以所有拓扑用完全相同的方式测量，改条件只改 `target.json` 一处。
-reference 因此必须用端口节点 `vdd`、`vinp`、`vinn`、`out`，且不得含 `.lib/.temp/.control/.end`、`VSUPPLY/VINP/VINN/CLOAD_OUT` 与参数 `VDD/VCM/CLOAD`（加载时检查，违反即拒绝启动）。
+
+**闭环偏置、开环测量**（testbench 的核心约定）：
+- 直流工作点在单位负反馈闭合时求得：`out` 经一个很大的电感（直流短路）接回反馈输入端，另一个输入端固定在 VCM，所以输出像实际使用时一样停在 VCM，
+  而不是被开环下的微小失配放大后推向电源轨。DC 检查（每个 MOS 饱和）就在这个真实工作点上做，并要求 `|V(out)−VCM| ≤ maximum_output_error_v`（`target.json`），
+  否则说明环路没有稳住输出（接错反馈端、某级饱和或整条支路没电流）。
+- AC 测的是开环：这个电感对交流开路，在反馈输入端经一个隔直电容注入 1 V AC，环路增益 T=−V(out)/V(注入)，负反馈时低频为正。
+  增益、UGB、PM 都由 T 得到；T 低频不为正（接错反馈端或增益为零）则整次仿真判无效。
+- 两级运放的级间电流失配 Rm 不再把输出推到轨：闭环把它吸收为输入失调，所以两级运放的基线直接通过 DC，DC 修复主要出现在偏置电压多的单级 cascode 和 PMOS 输入结构上。
+reference 必须用端口节点 `vdd`、`vinp`、`vinn`、`out`，且不得含 `.lib/.temp/.control/.end/.nodeset/.ic`、`VSUPPLY/VINP/VINN/CLOAD_OUT/LFB/VAC/CAC`、节点 `acin` 与参数 `VDD/VCM/CLOAD`（加载时检查，违反即拒绝启动）。
 加载时还检查：每行一个 `.param`；初值在可调范围内；整数参数的初值是整数；每个可调参数都被电路用到；`@analyses` 里的器件都存在。
 有效 W/L（含 `N_TAIL*WBN0` 这类乘积）的上下限是工艺规则，放在 `target.json → device_limits`，对所有 MOS 生效。
 
 **新增一个拓扑**：复制一个 reference，改电路、profile、注解和 NOTES，文件名按上面的规则取；不需要改任何其他文件，`pytest` 会检查它。
-`target.json` 只放规格：工艺/条件、指标、器件尺寸限制、DC 判据阈值、AC 扫描、预算。
+`target.json` 只放规格：工艺/条件、指标、器件尺寸限制、DC 判据阈值（含输出须稳在 VCM 的窗口）、AC 扫描、预算。
 
 ## 每次调用 Agent 看到什么
 
@@ -115,8 +125,31 @@ reference 因此必须用端口节点 `vdd`、`vinp`、`vinn`、`out`，且不�
 - 拓扑选择与审核 Agent 不接收公式手册。
 
 输出：拓扑选择 Agent 返回选中 id、每个候选的适配度与理由、预期风险；
-尺寸优化 Agent 只返回 `analysis` 与至多 3 个 `changes`（提案由 `apply_changes` 校验：可调参数、范围、整数、有效 W/L 范围、网表其余文本不变、old_value 一致；不合格则记录并反馈下一轮，仍占一次迭代）；
-审核 Agent 返回 `verdict`、`diagnosis`、给出错一方的 `revision_advice`、是否从 reference 重新开始。
+尺寸优化 Agent 先返回**一个** `change`（`parameter` 为可调参数名枚举，只给 `new_value`；old_value 由程序按当前网表填写），再返回简短 `analysis`。程序在模型外做这些确定性处理（`analog_agents/search.py`、`agents/sizing_agent/loop.py`）：
+- 超出范围的值夹到范围边界、整数四舍五入；
+- 已仿真过的点（含曾使 DC 失败的点）、与当前值相同的提案、违反有效 W/L 范围的提案被拒绝，并把原因告诉模型重新回答（同一决策内最多再问 2 次，不占决策预算；最终仍不合格才记录并占一次决策）；
+- 性能阶段某一步若使各指标的总缺口变大（含使 DC 由通过变失败），自动回退到上一个点（贪心爬山，模型永远在当前最优点上改）；该步所在方向在“没有任何改善”之前不能再提（`history` 的 `vs_previous` 列给出每步好/坏），回退不消耗 DC 修复预算；
+- **DC 修复阶段**：(1) 起点 DC 失败时，先把 memory 里离起点最近的、DC 通过过的设计整体试一次（不要求满足 specs，最多 2 个，占 DC 修复预算；仍然失败就撤销）；(2) 一次决策最多可改 4 个参数（偏置电压相互耦合，单独改一个往往没有任何变化；性能阶段仍是 1 个）；(3) reference 的 `@levers` 里可以有 `"dc"` 键，列出能让“关断”电路导通的参数（`-` 降低、`+` 升高，最有效的在前），回退步在 DC 阶段只用这些杠杆，一次同时走前 2 个；(4) 当所有 MOS 的 DC 都失败（电路没有电流）且 reference 声明了 `dc` 杠杆时，只改尺寸的提案会被拒绝并提示先动偏置杠杆。
+- **重问不再空转**：模型重复一个已被拒绝的提案就不再问第 3 次；拒绝信息带 `try_instead`（还没试过、也没被禁的杠杆）。仍然没有可用提案时，由程序走一步“回退杠杆”（`fallback`）：reference 的 `@levers`（`{"指标": {"参数": "+"|"-"}}`，`+` 表示调高该参数会使该指标升高）里，缺口最大的指标的下一个未试杠杆，按固定步长（宽范围 ×1.5，整数 ±1，窄范围 ±20% 范围）走一步；reference 没声明杠杆时，走一个从未动过的参数。找不到可走的杠杆才算免费拒绝。
+- **memory 里满足当前 specs 的设计整体试一次**：从 memory 里找出对**当前** specs 全部满足的设计，按离起点的距离从近到远，每轮最多试 2 个，作为一次决策（`phase: memory`，所有不同的参数一起改，不调模型）。没验证（实测变差）就撤销，这一步不计入连续回退。memory 里的点还用来拒绝重复仿真，并按当前 specs 重新标 `P/F`。
+- 大幅跳转的随机种子随轮数变化，一次只动至多 2 个参数，且不会落在已记住的点上。
+- **连续 3 次回退（都没改善）就放弃爬山**：由程序（不调用模型）随机大幅改动至多 3 个参数（各至少移动调参范围的 35%，不行再降到 25%、15%；宽范围按对数刻度），每个候选先做一次只含 DC 的仿真筛选，通过的才作为新区域的起点（`phase: explore`，`vs_previous: jump`），之后模型在新区域里继续单步微调。每轮 sizing 最多跳 2 次；找不到 DC 合格的跳点时占一次决策并继续原来的爬山。整个过程的最优点最后交出。
+- 一次决策的所有尝试都被拒绝时，每轮前 3 次不占决策预算，也不重新仿真（`budgets.cost_free_refusals_left`）；
+- 输入里的 `history` 是“已仿真点”表（变化过的参数、DC 状态、各指标），不再带模型自己的文字；
+- 一轮结束时交出最优点，而不是最后一步；
+- 手册按阶段只发相关章节（DC 修复阶段 1/3/4/6/12/14，性能阶段另加 8/9/13）。
+
+审核 Agent 只返回 `verdict`；`diagnosis` 和给出错一方的 `revision_advice` 都由程序根据 `spec_check`、贴边界的参数（标明只能增/减）、上一轮从未动过的参数、预算状态生成——模型引用数字不可靠。
+
+**设计记忆（`design_memory.txt`）**：每轮结束后，review agent 把这一轮仿真过的所有点（成功和失败，含起点、被回退的点、跳转点）写进项目根目录的这个文件（`ReviewAgent.remember` → `analog_agents/memory.py`）。
+- 每个 (电路类型, reference, 工作条件) 一节；每行一个点：`P 74.6 22.1 63.3 106 | W_STAGE2=23 R_RZ=7k`。状态 `P` = 满足当时 specs，`F` = 仿真了但没满足，`D` = DC 门失败（无性能，不写 `-`）；性能按 `cols` 行的顺序，单位写在方括号里（UGB 用 MHz、功耗用 uW）；`|` 之后只写与 reference 起点不同的参数，数值用最短的 SPICE 写法（`7k`、`1.5p`）。
+- 写入时先去重再限额：同一 reference 下，所有参数都在调参范围的 4% 以内的点只留一个（保留更好的，打平留更新的；DC 失败点与非 DC 失败点分开比较），然后每节最多 30 个点（其中 DC 失败点最多 10 个，保留最新的）。
+- 读取：拓扑 agent 的每个候选带 `memory`（点数、DC 失败数、最好的一行及它对当前 specs 的缺口，由程序计算）；sizing agent 的输入带 `memory`（同一 reference、同一工作条件下最好的 8 行，含对**当前** specs 的缺口 `mX`，再加几个 DC 失败点）。只作为证据，不是答案。
+- `python scripts/build_memory.py` 从 `results/runs/*`、当前 `results/`、reference 的 `@verified`（含 `params`）和 reference 备注里记载的点重建该文件（不调模型、不仿真；只用闭环测试台之后的记录，旧的开环记录不可比，跳过）。
+
+- `specs/target.json` 里可选的 `reference_tags`：只有在 reference 里用 `* @tags: …` 声明了其中任一标签的结构才会提供给拓扑 Agent（删掉这一行即恢复全部候选；目前四个 cascode 结构带 `cascode` 标签）。
+
+**已验证点（`@verified`）**：reference 里可以加一个机器可读的 `* @verified-begin … * @verified-end` 块（JSON 列表，每项 `{"conditions": {"vdd_v":…, "load_capacitance_f":…}, "metrics": {…}}`，必须是真正仿真过的设计）。拓扑 Agent 的每个候选带 `verified_points`，由程序与当前 specs 比较给出 `meets_specs`（true / false / 条件不同则为 null）和 `shortfalls`；prompt 禁止模型自己拿 profile 文本里的数字去比。sizing Agent 看不到该块。
 
 ## 输出
 
@@ -138,9 +171,10 @@ final_report.pdf          英文报告
 final_report_zh.pdf       中文报告
 ```
 
-PDF 报告包含：最终结果与规格对比、流程各轮表、拓扑选择理由与排名、最终电路的 profile 与由网表解析出的连线表、DC 验收、参数范围/初值/终值、
-每轮 sizing 的逐次迭代、审核结论与修改意见、token/仿真/耗时统计、完整 DC 诊断与最终网表。模型生成的文字保留英文原文。
-（报告与拓扑无关，用网表解析的连线表代替原来针对单一电路手绘的原理图。）
+PDF 报告先给最终结果、规格对比、各轮总表和统计，然后按 Agent 实际的工作顺序逐轮展开：每一轮依次是
+步骤 1 拓扑选择（理由与排名）→ 被选电路（profile、电路图、连线表）→ 步骤 2 尺寸优化（逐次迭代、DC 验收、参数初值/终值）→ 步骤 3 审核结论与修改意见；
+最后是完整 DC 诊断与最终网表。每个被选中参与 sizing 的拓扑在它第一次出现的那一轮画出电路图（再次沿用时指回该轮）。模型生成的文字保留英文原文。
+（电路图由网表自动绘制，与拓扑无关：MOS 与两端元件（电阻、电容、电流源、电压源）按到 vdd 的沟道距离分行，沿堆叠对齐成列，所有连线用黑色正交走线连起来、交汇处画圆点，vdd 和地用符号表示，接地的理想偏置电压源画成带名字的偏置端点，画法接近教科书。）
 
 ## 文件说明
 
@@ -173,15 +207,25 @@ PDF 报告包含：最终结果与规格对比、流程各轮表、拓扑选择�
 ## 测试
 
 ```bash
-/home/xu/.venv/bin/python -m pytest -q     # 不调用模型，不需要 GPU
+/home/xu/.venv/bin/python -m pytest -q             # 默认：不调用模型，不需要 GPU，不跑 PDK，几秒内完成
+/home/xu/.venv/bin/python -m pytest -q -m pdk      # 另跑 9 个真实 SKY130 + ngspice 的测试（约 2.5 分钟）
 ```
 
 包括：每个 reference 自洽性与命名规范、“具体电路信息只出现在 reference 中”的正则检查、恰好三个 Agent 的检查、
 testbench 生成（所有 reference 同一套测量、条件只来自规格）、证据视图去重，
 以及用脚本化 Agent 与脚本化仿真器测试整个流程的路由（首轮通过、sizing 返工、拓扑返工并排除失败拓扑、3 轮上限、预算校验、审核结论被数值覆盖、从头/续做、旧结果归档）。
 
+`-m pdk` 的 9 个测试用真实 PDK 检查：基线两级运放在闭环下 DC 通过且输出被钳在 VCM、profile 里记录的两个已验证设计、
+把反馈接到另一个输入时环路增益为负（被判无效）、折叠式 NMOS 输入的已验证偏置点在 `vinn` 上相位裕度合理（不是接反时的 256°），
+以及其余四个 reference 在声明的反馈输入上低频环路增益为正、接到另一个输入上为负（六个声明合起来全部覆盖）。
+它们不属于默认测试，因为每个设计约 15 秒；改动 testbench、反馈声明或 reference 里引用的已验证数据后应该跑一遍。
+
 ## 已知限制
 
-- 除 `two_stage_nmos_input_pmos_stage2` 外，其余 5 个 reference 的初始尺寸/偏置是示意性的，基线都不能通过 DC 检查（profile 里已写明）。
+- 除 `two_stage_nmos_input_pmos_stage2` 外，其余 5 个 reference 的初始尺寸/偏置是示意性的，基线都不能通过 DC 检查（profile 里已写明原因）。
   折叠/套筒式使用理想偏置电压源，参数多且耦合强，5 次 DC 修复内能否通过取决于模型；这正是审核 Agent 判 `fail_topology/fail_sizing` 的依据。
+  PMOS 输入的三个 reference 在 VCM=0.9 V 下还受 PDK 限制：pfet_01v8 的 |Vth| 随 L 变化很大（0.15 µm 约 0.68 V，0.5 µm 约 1.02 V），输入对必须用最短的 L。
+- `@feedback-input` 由写 reference 的人声明。六个声明都做过 ngspice 检查：接对时低频环路增益为正；接反时为负，或输出锁死在电源轨。检查结果也与手工推导的信号电流方向一致。
+  两级的两个和套筒式的两个测的是基线（PMOS 输入两级和两个套筒式的基线仍未通过 DC，但环路已稳住或有增益，符号有意义）；折叠式 NMOS 输入用已验证的偏置点；
+  折叠式 PMOS 输入的基线是死电路，用的是 ngspice 搜索到的、闭环稳在 VCM 的弱反型偏置点（那里只有过驱动判据不过）。这些实验只用了 ngspice，没有跑 Agent 流程。
 - reference 不再是可以直接交给 ngspice 的完整网表（testbench 由工具生成）。想看某次实际仿真的完整网表，打开 `round_NN/logs/simulation_NNN.spice`。

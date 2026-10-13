@@ -9,7 +9,8 @@
 * ADVANTAGES
 * - One dominant pole at the output (set by CL) -> self-compensated: no compensation capacitor and phase margin
 *   is normally high (typically > 70 deg) because non-dominant poles sit at low-impedance fold/cascode nodes.
-* - UGB = gm1/(2*pi*CL): a 10 MHz UGB with 2 pF needs gm1 ~ 130 uS, i.e. modest current; speed per power is good.
+* - UGB ~ gm1/(2*pi*C_out), C_out = CL + the parasitics at the output (measured +25% for CL = 2 pF): a 10 MHz UGB with
+*   2 pF needs gm1 ~ 130-160 uS, i.e. modest current; speed per power is good.
 * - Cascoding boosts output resistance, giving higher single-stage gain than a plain differential stage.
 * - The input pair is NOT stacked under the cascodes, so the input common-mode range is wider than a telescopic
 *   structure's (VCM = 0.9 V at VDD = 1.8 V is comfortable) and the output swing is larger than telescopic's.
@@ -19,12 +20,15 @@
 * - Biasing is delicate and fully manual here: four ideal bias voltages must put 11 devices simultaneously in
 *   saturation; a wrong bias collapses the circuit into a near-zero-current state (observed in the baseline).
 * - Single-stage gain is limited to roughly (gm*ro)^2-class values at best; the textbook estimate at L = 0.15-0.5 um in
-*   this process is 50-70 dB (not measured here), so a 60 dB target is only reachable if EVERY device in the cascode stacks stays saturated.
+*   this process is 50-70 dB (57.7 dB measured at the verified point below), so a 60 dB target is only reachable if EVERY device in the cascode stacks stays saturated.
 *   Gain collapses abruptly when any stack device leaves saturation (no gradual degradation).
 * - Output swing is reduced by about four saturation voltages (two cascode stacks); at 1.8 V the usable window is small.
-* - NOT verified in this library: initial sizes/biases are illustrative. Baseline simulation: the DC gate fails
-*   for all 11 devices (output ~0.03 V, supply power ~0.3 uW) -- bias voltages and the fold/tail current
-*   relationship must be re-derived before any AC result is meaningful.
+* - The initial biases are illustrative: the baseline simulation (loop closed) fails the DC gate for all 11 devices and the
+*   loop cannot regulate out (0.39 V; supply power ~0.3 uW, the circuit is essentially off), so the four bias voltages
+*   must be re-derived. A DC- and AC-valid point WAS found by sizing (VERIFIED by simulation): VBN_TAIL 0.74, VBN_CAS
+*   0.73, VBP_CAS 0.24, VBP_FOLD 0.55 with the default sizes: all 11 devices saturated (tightest: fold sources 20 mV,
+*   tail 27 mV), gain 57.7 dB, UGB 51.6 MHz, PM 76.9 deg, 352 uW. It missed 80 MHz because gm1 was 0.81 mS and the real
+*   output capacitance is CL + ~0.5 pF; more gm1 needs more tail current (148 uW of power headroom were left).
 * BEST WHEN: a single-stage, self-compensated amplifier with a wide input range and good phase margin is wanted, the
 * load is a few pF, gain ~60 dB is enough and the DC bias can be tuned (a designer with headroom budget to spare).
 * AVOID WHEN: a high-confidence quick pass of the DC gate is needed (many coupled bias voltages), gain well above
@@ -35,9 +39,19 @@
 *  {"type": "cascode_stage", "input_device": "XM1", "load_capacitance_condition": "load_capacitance_f", "stacks": {"down_from_out": ["XML2", "XMN2"], "up_from_out": ["XMC2", ["XMF2", "XM2"]]}}
 * ]
 * @analyses-end
+* @verified-begin
+* [
+*  {"conditions": {"vdd_v": 1.8, "load_capacitance_f": 2e-12}, "metrics": {"dc_gain_db": 57.7, "ugb_hz": 51.6e6, "phase_margin_deg": 76.9, "power_w": 352e-6}, "params": {"VBN_TAIL": "0.74", "VBN_CAS": "0.73", "VBP_CAS": "0.24", "VBP_FOLD": "0.55"}}
+* ]
+* @verified-end
+* @levers-begin
+*  {"dc_gain_db": {"L_IN": "+", "L_CAS": "+", "L_LOAD": "+", "L_FOLD": "+"}, "ugb_hz": {"W_IN": "+", "VBN_TAIL": "+"}, "phase_margin_deg": {"W_IN": "-", "VBN_TAIL": "-"}, "power_w": {"VBN_TAIL": "+"}, "dc": {"VBP_FOLD": "-", "VBP_CAS": "-"}}
+* @levers-end
+* @tags: cascode single_stage
+* @feedback-input: vinn
 *
 * NOTES (this circuit only; estimates unless marked verified)
-* Not verified by simulation. Shared W/L parameters: W_CAS/L_CAS size BOTH XMC (PMOS cascodes) and XMN (NMOS bottom
+* Shared W/L parameters: W_CAS/L_CAS size BOTH XMC (PMOS cascodes) and XMN (NMOS bottom
 * cascodes); W_LOAD/L_LOAD size XML1/XML2; W_FOLD/L_FOLD size XMF1/XMF2; W_TAIL/L_TAIL size XMTAIL.
 * Currents (strong inversion, estimate): Itail = 0.5*kn*(W_TAIL/L_TAIL)*(VBN_TAIL - VTn)^2, each input device carries
 * Itail/2. Fold source I_F = 0.5*kp*(W_FOLD/L_FOLD)*(VDD - VBP_FOLD - |VTp|)^2. Branch current in each cascode/mirror
@@ -46,14 +60,18 @@
 * Headroom per branch (VDD to GND): XMF Vsd >= |VDSAT_F|; node a = VDD - Vsd_F; XM1 Vds = V(a) - V(tail) >= VDSAT_in;
 * V(tail) >= VDSAT_tail. Cascode gate: VBP_CAS ~ V(a) - Vsg_C so XMC (source at a) is saturated with Vsd_C >= |VDSAT_C|.
 * Mirror/cascode: V(left) = V(nl) + Vgs_L; VBN_CAS ~ V(nl) + Vgs_N with XMN Vds = V(nl) >= VDSAT_N.
-* DC symptoms: all devices near zero current and out/left near 0 V -> tail or fold currents are cut off (raise VBN_TAIL or
-* lower VBP_FOLD) before changing sizes; out at VDD -> mirror leg current is smaller than the other branches' demand.
-* Output node out is high impedance: with equal currents it settles where PMOS-side and NMOS-side currents balance;
-* re-trim VBP_FOLD / VBP_CAS / VBN_CAS rather than W/L once all devices conduct.
-* Performance: A0 ~ gm1*(Rout_up || Rout_down), UGB ~ gm1/(2*pi*CL), PM normally high (single dominant pole).
+* DC symptoms (the loop holds out at VCM, so a failing loop means the stack has no current): all devices near zero current
+* and out far from VCM -> tail or fold currents are cut off (raise VBN_TAIL or lower VBP_FOLD) before changing sizes. With the loop
+* closed a mismatch between the PMOS-side and NMOS-side currents at out is absorbed as an input offset (current mismatch / gm1)
+* instead of moving out; a large mismatch shows up as unequal currents in XM1/XM2 and can take the tail or fold sources out of
+* saturation. Re-trim VBP_FOLD / VBP_CAS / VBN_CAS rather than W/L once all devices conduct.
+* [Verified point] the bias voltages in the profile give Itail 93 uA (46.6 uA per input device), I_F 98 uA per fold source,
+* 51 uA per cascode/mirror leg, supply 196 uA (2.1x the tail current). The PMOS devices need a large Vsg (|VTp| 1.0 V for the
+* fold sources, 1.06 V for the cascodes with body effect: Vsg 1.25 / 1.29 V), which is why the fold and cascode gates sit far
+* below mid-supply (0.55 / 0.24 V) and why the fold sources and the tail have only 20-30 mV of saturation margin.
+* Performance: A0 ~ gm1*(Rout_up || Rout_down), UGB ~ gm1/(2*pi*C_out) with C_out = CL + parasitics at out, PM normally high (single dominant pole).
 * Power ~ VDD*(Itail + 2*I_F); limit is in target.json. derived_calculations reports the stack-resistance estimate.
 *
-* Tunable parameters: the .param lines annotated "; tune MIN..MAX [UNIT] [int]" (everything else is fixed).
 .param W_IN=20          ; tune 1..100 um
 .param L_IN=0.5         ; tune 0.15..2 um
 .param W_CAS=12         ; tune 1..100 um

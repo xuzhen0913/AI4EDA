@@ -14,12 +14,15 @@
 * - Five devices stacked between VDD and ground: at 1.8 V the headroom is extremely tight, so input common-mode range
 *   and output swing are the smallest of the candidates and a valid bias window may not exist at VCM = 0.9 V.
 * - PMOS input pair has lower gm per current than NMOS (needs more current for the same UGB).
-* - The high-impedance output node makes the DC level very sensitive to mirror balance and bias voltages.
+* - Mirror imbalance between the NMOS load and the PMOS stack is absorbed by the closed loop as an input offset
+*   (current mismatch / gm1), but with only ~0.1 V of headroom per device the offset quickly takes a device out of saturation.
 * - Single-stage gain is limited to roughly (gm*ro)^2-class values at best; the textbook estimate at L = 0.15-0.5 um in
-*   this process is 50-70 dB (not measured here), so a 60 dB target is only reachable if EVERY device in the cascode stacks stays saturated.
+*   this process is 50-70 dB (not measured for this structure), so a 60 dB target is only reachable if EVERY device in the cascode stacks stays saturated.
 *   Gain collapses abruptly when any stack device leaves saturation (no gradual degradation).
-* - NOT verified in this library: initial sizes/biases are illustrative. Baseline simulation: the DC gate fails
-*   (all 9 devices; output ~0.37 V, power ~0.1 uW) and the AC gain is only ~36 dB with UGB ~45 kHz.
+* - NOT verified in this library: initial sizes/biases are illustrative. Baseline simulation (loop closed): the DC gate fails
+*   for all 9 devices; the loop does hold out at 0.89 V but only ~0.03 uA flows (power ~0.1 uW): the PMOS pair is cut off
+*   (Vsg 0.75 V against |Vth| 1.04 V at L_IN = 0.5 um) and the cascoded mirror is off. At VCM = 0.9 V this pair needs its source
+*   at VCM + |Vth| (measured |Vth| of this PDK's pfet_01v8 (W = 100 um, Vsb = 0.1 V): 0.68 V at L = 0.15 um, 0.95 V at 0.25 um, 1.02 V at 0.5 um), so L_IN must be at (or very near) the 0.15 um minimum.
 * BEST WHEN: noise or power dominates, input common mode is low, and the supply is comfortable.
 * AVOID WHEN: VDD is 1.8 V with a mid-supply common mode, a reliable DC pass matters, or output swing must be wide.
 * @profile-end
@@ -28,20 +31,23 @@
 *  {"type": "cascode_stage", "input_device": "XM1", "load_capacitance_condition": "load_capacitance_f", "stacks": {"up_from_out": ["XMC2", "XM2"], "down_from_out": ["XML2", "XMN2"]}}
 * ]
 * @analyses-end
+* @tags: cascode single_stage
+* @feedback-input: vinn
 *
 * NOTES (this circuit only; estimates unless marked verified)
-* Not verified by simulation (polarity mirror of the NMOS-input telescopic). W_CAS/L_CAS size BOTH XMC (PMOS cascodes below the pair)
+* Not verified by simulation (polarity mirror of the NMOS-input telescopic; the loop closes on vinn in both). W_CAS/L_CAS size BOTH XMC (PMOS cascodes below the pair)
 * and XMN (NMOS biased devices at ground); W_LOAD/L_LOAD size the NMOS diode/mirror pair XML1/XML2; XMN gates are all at VBN_CAS;
 * XMTAIL is set by VBP_TAIL, W_TAIL, L_TAIL.
 * Itail = 0.5*kp*(W_TAIL/L_TAIL)*(VDD - VBP_TAIL - |VTp|)^2; each branch carries Itail/2 and the NMOS XMN devices (gate VBN_CAS) must
-* be able to pass it: Icap_N = 0.5*kn*(W_CAS/L_CAS)*(VBN_CAS - VTn)^2. If Icap_N < Itail/2, NMOS side starves and out rises toward VDD (or the
-* stack sits in a near-zero-current state); if Icap_N >> Itail/2, XMN goes to the triode region and out falls toward ground. Match them first.
+* be able to pass it: Icap_N = 0.5*kn*(W_CAS/L_CAS)*(VBN_CAS - VTn)^2. If Icap_N < Itail/2 the NMOS side cannot carry the branch current: the
+* closed loop unbalances the pair (input offset = delta_I/gm1) until a device leaves saturation, or the stack sits in a near-zero-current state;
+* if Icap_N >> Itail/2 the loop absorbs the surplus the same way. Keep Icap_N close to Itail/2.
 * Headroom (VDD = 1.8 V): V(tail) <= VDD - |VDSAT_tail|; V(a) = V(tail) - Vsd_in; XMC gate VBP_CAS ~ V(a) - |Vgs_C|;
 * out <= V(a) - |VDSAT_C|; XML diode sits above XMN: V(left) = V(nl) + Vgs_L with V(nl) >= VDSAT_N.
-* Input common mode 0.9 V: V(tail) = 0.9 + |Vgs_in|; a larger input overdrive shrinks the room for the tail and cascode.
-* Performance: A0 ~ gm1*(Rout_up || Rout_down), UGB ~ gm1/(2*pi*CL), PM normally high. Power ~ VDD*Itail (no fold branch).
+* Input common mode 0.9 V: V(tail) = 0.9 + |Vgs_in| <= VDD - |VDSAT_tail|, so |Vth_in| above ~0.75 V cannot work at VDD = 1.8 V; measured |Vth| of this PDK's pfet_01v8 (W = 100 um, Vsb = 0.1 V): 0.68 V at L = 0.15 um, 0.95 V at 0.25 um, 1.02 V at 0.5 um:
+* use L_IN (and L_TAIL) at or very near 0.15 um, which costs gain. A larger input overdrive shrinks the room for the tail and cascode.
+* Performance: A0 ~ gm1*(Rout_up || Rout_down), UGB ~ gm1/(2*pi*C_out) with C_out = CL + parasitics at out, PM normally high. Power ~ VDD*Itail (no fold branch).
 *
-* Tunable parameters: the .param lines annotated "; tune MIN..MAX [UNIT] [int]" (everything else is fixed).
 .param W_IN=20          ; tune 1..100 um
 .param L_IN=0.5         ; tune 0.15..2 um
 .param W_CAS=12         ; tune 1..100 um

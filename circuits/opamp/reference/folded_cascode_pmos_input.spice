@@ -8,7 +8,8 @@
 * PMOS devices above it (from VDD); the output is the drain of the mirror/cascode branch.
 * ADVANTAGES
 * - One dominant pole at the output (set by CL) -> self-compensated, usually high phase margin; no CC needed.
-* - UGB = gm1/(2*pi*CL); modest current gives a 10 MHz-class UGB into 2 pF.
+* - UGB ~ gm1/(2*pi*C_out), C_out = CL + the parasitics at the output (typically +10-30%); modest current gives a
+*   10 MHz-class UGB into 2 pF.
 * - Cascode output resistance gives more gain than a simple differential stage.
 * - PMOS input: input common-mode range reaches down to ground (useful when the input sits low), lower flicker
 *   noise than an NMOS pair, and the pair is not stacked under the cascodes, so ICMR/swing beat telescopic.
@@ -18,10 +19,12 @@
 * - Delicate manual bias: four ideal bias voltages must keep 11 devices saturated at once; a wrong bias collapses
 *   the circuit into a near-zero-current state.
 * - Single-stage gain is limited to roughly (gm*ro)^2-class values at best; the textbook estimate at L = 0.15-0.5 um in
-*   this process is 50-70 dB (not measured here), so a 60 dB target is only reachable if EVERY device in the cascode stacks stays saturated.
+*   this process is 50-70 dB (not measured for this structure), so a 60 dB target is only reachable if EVERY device in the cascode stacks stays saturated.
 *   Gain collapses abruptly when any stack device leaves saturation (no gradual degradation).
-* - NOT verified in this library: initial sizes/biases are illustrative. Baseline simulation: the DC gate fails
-*   for 9 of 11 devices (output ~0.004 V, supply power ~15 uW); bias voltages and tail/fold current relationship must be re-derived.
+* - NOT verified in this library: initial sizes/biases are illustrative. Baseline simulation (loop closed): the DC gate fails
+*   for 9 of 11 devices and the loop cannot regulate out (0.004 V; supply power ~15 uW); bias voltages and tail/fold current
+*   relationship must be re-derived. At VCM = 0.9 V the PMOS input pair is the headroom problem: it needs its source at VCM +
+*   |Vth| (measured |Vth| of this PDK's pfet_01v8 (W = 100 um, Vsb = 0.1 V): 0.68 V at L = 0.15 um, 0.95 V at 0.25 um, 1.02 V at 0.5 um), so a long input pair is cut off and L_IN must be at (or very near) the 0.15 um minimum.
 * BEST WHEN: a single-stage, self-compensated amplifier with a low input common mode or low-noise PMOS input is
 * wanted, and gain ~60 dB is enough and bias tuning budget exists.
 * AVOID WHEN: a quick, reliable DC pass is needed (many coupled bias voltages), UGB per power is paramount (prefer
@@ -32,9 +35,15 @@
 *  {"type": "cascode_stage", "input_device": "XM1", "load_capacitance_condition": "load_capacitance_f", "stacks": {"up_from_out": ["XML2", "XMP2"], "down_from_out": ["XMC2", ["XMF2", "XM2"]]}}
 * ]
 * @analyses-end
+* @tags: cascode single_stage
+* @feedback-input: vinn
 *
 * NOTES (this circuit only; estimates unless marked verified)
-* Not verified by simulation (polarity mirror of the NMOS-input folded cascode). W_CAS/L_CAS size BOTH XMC (NMOS cascodes)
+* No DC-valid design is known for this reference yet, but its loop polarity IS verified: at bias points found by an ngspice search (L_IN = L_TAIL = 0.15 um,
+* about 10 uA in each input device, W_IN ~43, W_TAIL ~42, W_FOLD ~25, VBP_TAIL ~1.065, VBN_FOLD ~0.59) the loop holds out at VCM and the devices are
+* (nearly) saturated but in weak inversion (overdrive 0 to -0.19 V, so the overdrive check is what fails there); the loop gain is T = +550..+720 (55-57 dB, UGB 2-5 MHz,
+* PM 82-84 deg, 35 uW) on vinn and negative on vinp. Strong inversion needs more current per width (smaller W or more current), and XMP (VBP_CAS) must keep its Vsd.
+* W_CAS/L_CAS size BOTH XMC (NMOS cascodes)
 * and XMP (PMOS cascodes at VDD); W_LOAD/L_LOAD size the PMOS mirror XML1/XML2; W_FOLD/L_FOLD size the NMOS fold sinks XMF1/XMF2.
 * Itail = 0.5*kp*(W_TAIL/L_TAIL)*(VDD - VBP_TAIL - |VTp|)^2; each input device carries Itail/2.
 * Fold sink I_F = 0.5*kn*(W_FOLD/L_FOLD)*(VBN_FOLD - VTn)^2. Leg current in each cascode/mirror leg = I_F - Itail/2 > 0 required;
@@ -42,11 +51,13 @@
 * Headroom: XMF Vds >= VDSAT_F; node a = Vds_F; input pair Vsd = V(tail) - V(a) >= |VDSAT_in|, V(tail) <= VDD - |VDSAT_tail|.
 * VBN_CAS ~ V(a) + Vgs_C so XMC (source at a) is saturated. Mirror side: V(pl) = VDD - Vsd_P with VBP_CAS ~ VDD - |Vgs_P| - Vsd_P;
 * V(left) = V(pl) - Vsg_L.
-* DC symptoms: all currents near zero and out near 0 V -> tail cut off (VBP_TAIL too close to VDD) or fold sinks too weak/strong; adjust bias voltages
-* before changing sizes. With equal currents the high-impedance output settles where NMOS- and PMOS-side currents balance; trim biases once all devices conduct.
-* Performance: A0 ~ gm1*(Rout_up || Rout_down), UGB ~ gm1/(2*pi*CL), PM normally high. Power ~ VDD*(Itail + 2*I_F).
+* DC symptoms (the loop holds out at VCM, so a failing loop means the stack has no current): all currents near zero and out far from VCM ->
+* tail cut off (VBP_TAIL too close to VDD) or fold sinks too weak/strong; adjust bias voltages before changing sizes. A mismatch between the
+* NMOS-side and PMOS-side currents at out is absorbed as an input offset (current mismatch / gm1); trim biases once all devices conduct.
+* Input pair at VCM = 0.9 V: tail source Vsd >= |VDSAT_tail| and pair Vsg = V(tail) - 0.9 V must exceed |Vth|, so |Vth| above ~0.75 V cannot
+* work at VDD = 1.8 V. Measured |Vth| of this PDK's pfet_01v8 (W = 100 um, Vsb = 0.1 V): 0.68 V at L = 0.15 um, 0.95 V at 0.25 um, 1.02 V at 0.5 um; use L_IN (and L_TAIL) at or very near 0.15 um, which costs gain.
+* Performance: A0 ~ gm1*(Rout_up || Rout_down), UGB ~ gm1/(2*pi*C_out) with C_out = CL + parasitics at out, PM normally high. Power ~ VDD*(Itail + 2*I_F).
 *
-* Tunable parameters: the .param lines annotated "; tune MIN..MAX [UNIT] [int]" (everything else is fixed).
 .param W_IN=20          ; tune 1..100 um
 .param L_IN=0.5         ; tune 0.15..2 um
 .param W_CAS=12         ; tune 1..100 um

@@ -4,12 +4,26 @@ Every file in circuits/opamp/reference/ is one candidate topology and contains
 
     * @profile-begin ... * @profile-end     free text read by the topology and review agents
     * @analyses-begin ... * @analyses-end   optional JSON list of pre-computed estimates that suit this topology
+    * @levers-begin ... * @levers-end       optional JSON {"metric": {"PARAM": "+"|"-"}}: "+" = raising PARAM raises the
+                                            metric (first-order, from the circuit's own physics); used by the toolchain
+                                            to name untried moves and to propose a step when the model has none. The key
+                                            "dc" lists the parameters that make a switched-off circuit conduct ("+": raise,
+                                            "-": lower), most effective first
+    * @verified-begin ... * @verified-end   optional JSON list of simulated designs: {"conditions", "metrics"}; Python
+                                            compares them with the specs so the topology agent need not
+    * @tags: word word ...                  optional structure tags (e.g. a family) that specs may ask for
+    * @feedback-input: vinp|vinn             the input that closes the unity-gain loop (the inverting one)
     notes (ordinary comments), then the circuit itself.
 
 The circuit is the design under test only. Tunable parameters are the `.param` lines annotated
 `; tune MIN..MAX [UNIT] [int]`; their device terminals, models, W/L expressions and DC-check
-diagnostics are read from the netlist, so nothing is declared twice. Supply, sources, load, library,
+diagnostics are read from the netlist, so nothing is declared twice. Supply, sources, feedback loop, load, library,
 DC diagnostics and AC measurements come from the shared testbench (simulator/testbench.py).
+
+Which input is the inverting one is a property of the topology (two inverting stages: out falls when vinp rises, so the
+loop closes on vinp; a single mirror-loaded stage: out rises with vinp, so it closes on vinn). It is declared here,
+because the closed-loop DC operating point is needed before any AC result can say it; a wrong declaration is caught by
+the sign of the loop gain in the AC measurement.
 """
 import copy
 import json
@@ -21,6 +35,10 @@ from simulator.testbench import check_circuit
 
 PROFILE = re.compile(r'^\*\s*@profile-begin\s*\n(.*?)^\*\s*@profile-end\s*$', re.M | re.S)
 ANALYSES = re.compile(r'^\*\s*@analyses-begin\s*\n(.*?)^\*\s*@analyses-end\s*$', re.M | re.S)
+VERIFIED = re.compile(r'^\*\s*@verified-begin\s*\n(.*?)^\*\s*@verified-end\s*$', re.M | re.S)
+LEVERS = re.compile(r'^\*\s*@levers-begin\s*\n(.*?)^\*\s*@levers-end\s*$', re.M | re.S)
+TAGS = re.compile(r'^\*\s*@tags:\s*(.+?)\s*$', re.M)
+FEEDBACK = re.compile(r'^\*\s*@feedback-input:\s*(vinp|vinn)\s*\n?', re.M | re.I)
 TUNE = re.compile(r';\s*tune\s+(\S+?)\.\.(\S+)((?:\s+\S+)*)\s*$', re.I)
 DEVICE_ROLES = ('input_device', 'gain_device', 'bias_device', 'mirror_reference_device', 'first_stage_load_device')
 
@@ -35,11 +53,15 @@ class Reference:
     bounds: dict      # tunable name -> {'min', 'max', 'unit', 'integer'}
     initial: dict     # every .param name -> value string
     devices: dict     # MOS name -> terminals/model/kind/W/L/diagnostic_prefix
+    feedback_input: str  # 'vinp' or 'vinn': where the unity-gain feedback of the testbench connects
+    verified: tuple = ()  # simulated designs: {'conditions': {...}, 'metrics': {...}}
+    levers: dict = None   # metric -> {tunable name: '+' | '-'}
+    tags: tuple = ()      # optional structure tags from `* @tags: ...`
 
 
 def agent_netlist(text):
     """What the sizing agent reads: notes and circuit, without the selector's profile or the tooling block."""
-    return re.sub(r'\n{3,}', '\n\n', ANALYSES.sub('', PROFILE.sub('', text))).strip('\n') + '\n'
+    return re.sub(r'\n{3,}', '\n\n', FEEDBACK.sub('', TAGS.sub('', LEVERS.sub('', VERIFIED.sub('', ANALYSES.sub('', PROFILE.sub('', text))))))).strip('\n') + '\n'
 
 
 def parse_bounds(text):
@@ -58,6 +80,9 @@ def parse_reference(text, name, path=None):
     profile, analyses = PROFILE.search(text), ANALYSES.search(text)
     if not profile or not profile[1].strip():
         raise ValueError(f'{name}: missing @profile block')
+    feedback = FEEDBACK.findall(text)
+    if len(feedback) != 1:
+        raise ValueError(f'{name}: exactly one "* @feedback-input: vinp|vinn" line is required (the inverting input)')
     for match in PARAM.finditer(text):
         if len(re.findall(r'\w+\s*=', match[0].split(';')[0])) != 1:
             raise ValueError(f'{name}: exactly one .param assignment per line: {match[0].strip()}')
@@ -90,8 +115,20 @@ def parse_reference(text, name, path=None):
         unknown = [d for d in named if d.upper() not in devices]
         if unknown:
             raise ValueError(f'{name}: analysis {spec.get("type")} names unknown devices {unknown}')
+    verified = VERIFIED.search(text)
+    points = json.loads(re.sub(r'^\*\s?', '', verified[1], flags=re.M)) if verified else []
+    for point in points:
+        if not (isinstance(point.get('conditions'), dict) and isinstance(point.get('metrics'), dict)
+                and all(isinstance(v, (int, float)) for v in {**point['conditions'], **point['metrics']}.values())):
+            raise ValueError(f'{name}: each @verified entry needs numeric "conditions" and "metrics"')
+    levers_block = LEVERS.search(text)
+    levers = json.loads(re.sub(r'^\*\s?', '', levers_block[1], flags=re.M)) if levers_block else {}
+    for metric, moves in levers.items():
+        if not (isinstance(moves, dict) and all(k in bounds and v in ('+', '-') for k, v in moves.items())):
+            raise ValueError(f'{name}: @levers of {metric} must map tunable parameters to "+" or "-"')
     return Reference(name, Path(path) if path else Path(name), text,
-                     re.sub(r'^\*\s?', '', profile[1], flags=re.M).strip(), specs, bounds, initial, devices)
+                     re.sub(r'^\*\s?', '', profile[1], flags=re.M).strip(), specs, bounds, initial, devices,
+                     feedback[0].lower(), tuple(points), levers, tuple(TAGS.search(text)[1].lower().split()) if TAGS.search(text) else ())
 
 
 def load_reference(path):
@@ -119,5 +156,7 @@ def design_target(specs, reference):
         device_bounds={n: dict(limits) for n in reference.devices})
     target.setdefault('dc_acceptance', {})['devices'] = copy.deepcopy(reference.devices)
     target['derived_analyses'] = copy.deepcopy(reference.analyses)
+    target['feedback_input'] = reference.feedback_input
+    target['levers'] = copy.deepcopy(reference.levers or {})
     return target
 

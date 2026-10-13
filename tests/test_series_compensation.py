@@ -6,15 +6,13 @@ from simulator.report_generator import mos_table
 from helpers import REF, TARGET
 
 
-def test_resistor_geometry_is_adjustable_but_sheet_resistance_fixed():
-    after=apply_changes(REF,REF,TARGET,[dict(parameter='L_RZ',old_value='10',new_value='30')])
-    p=parameters(after)
-    assert number(p['RSH_RZ'])*number(p['L_RZ'])/number(p['W_RZ'])==3000
-    assert 'CCOMP n2 ncomp {CC}' in after
-    assert 'RCOMP ncomp out {RSH_RZ*L_RZ/W_RZ}' in after
-    for change in [dict(parameter='RSH_RZ',old_value='100',new_value='200'),
-                   dict(parameter='W_RZ',old_value='1',new_value='0'),
-                   dict(parameter='L_RZ',old_value='10',new_value='101')]:
+def test_series_resistor_is_one_directly_tunable_value():
+    after=apply_changes(REF,REF,TARGET,[dict(parameter='R_RZ',old_value='1000',new_value='5k')])
+    assert number(parameters(after)['R_RZ'])==5000
+    assert 'CCOMP n2 ncomp {CC}' in after and 'RCOMP ncomp out {R_RZ}' in after
+    for change in [dict(parameter='R_RZ',old_value='1000',new_value='0'),
+                   dict(parameter='R_RZ',old_value='1000',new_value='21k'),
+                   dict(parameter='L_RZ',old_value='10',new_value='30')]:      # the geometry parameters no longer exist
         with pytest.raises(ValueError):apply_changes(REF,REF,TARGET,[change])
     with pytest.raises(ValueError):validate_candidate(REF,after.replace('RCOMP ncomp out','RCOMP ncomp 0'),TARGET)
 

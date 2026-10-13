@@ -8,19 +8,21 @@
 * the whole stack; no folding branch.
 * ADVANTAGES
 * - Best power efficiency and speed of the library's single-stage structures: all current is signal current
-*   (no fold branch), so gm1 per microamp is highest and UGB = gm1/(2*pi*CL) is cheapest in power.
+*   (no fold branch), so gm1 per microamp is highest and UGB ~ gm1/(2*pi*C_out) (C_out = CL + output parasitics) is cheapest in power.
 * - Lowest noise and fewest devices (9) and bias voltages (3); high output resistance from the cascode stacks.
 * - Self-compensated by CL: one dominant pole, large phase margin when all devices are saturated.
 * DISADVANTAGES
 * - Five devices are stacked between VDD and ground (tail, input, cascode, mirror, bias PMOS): at VDD = 1.8 V the
 *   headroom is extremely tight. Input common-mode range and output swing are the smallest of all candidates; the
 *   fixed VCM = 0.9 V may leave no valid bias window, in which case the DC gate cannot be passed at all.
-* - The output DC level depends on exact mirror balance of a high-impedance node, so it is very sensitive.
+* - Mirror imbalance between the PMOS load and the NMOS stack is absorbed by the closed loop as an input offset
+*   (current mismatch / gm1), but with only ~0.1 V of headroom per device the offset quickly takes a device out of saturation.
 * - Single-stage gain is limited to roughly (gm*ro)^2-class values at best; the textbook estimate at L = 0.15-0.5 um in
-*   this process is 50-70 dB (not measured here), so a 60 dB target is only reachable if EVERY device in the cascode stacks stays saturated.
+*   this process is 50-70 dB (not measured for this structure), so a 60 dB target is only reachable if EVERY device in the cascode stacks stays saturated.
 *   Gain collapses abruptly when any stack device leaves saturation (no gradual degradation).
-* - NOT verified in this library: initial sizes/biases are illustrative. Baseline simulation: the DC gate fails
-*   (7 of 9 devices; output ~0.01 V, power ~15 uW, the stack sits in a near-zero-current state).
+* - NOT verified in this library: initial sizes/biases are illustrative. Baseline simulation (loop closed): the DC gate fails
+*   (7 of 9 devices; the loop cannot regulate out: 0.57 V instead of 0.9 V; power ~14.5 uW, the stack sits in a near-zero-current
+*   state with the tail and the cascodes in triode).
 * BEST WHEN: power or noise is the dominant requirement, the supply is comfortable (>= 2.5 V) or the signal
 * swing and input common-mode range requirements are tiny.
 * AVOID WHEN: the supply is 1.8 V or lower with a fixed mid-supply input common mode, a reliable DC pass matters,
@@ -31,21 +33,23 @@
 *  {"type": "cascode_stage", "input_device": "XM1", "load_capacitance_condition": "load_capacitance_f", "stacks": {"down_from_out": ["XMC2", "XM2"], "up_from_out": ["XML2", "XMP2"]}}
 * ]
 * @analyses-end
+* @tags: cascode single_stage
+* @feedback-input: vinn
 *
 * NOTES (this circuit only; estimates unless marked verified)
 * Not verified by simulation. W_CAS/L_CAS size BOTH XMC (NMOS cascodes above the pair) and XMP (PMOS biased devices at VDD);
 * W_LOAD/L_LOAD size the PMOS diode/mirror pair XML1/XML2; XMP gates are all at VBP_CAS; XMTAIL is set by VBN_TAIL, W_TAIL, L_TAIL.
 * Itail = 0.5*kn*(W_TAIL/L_TAIL)*(VBN_TAIL - VTn)^2 in strong inversion; each branch carries Itail/2, and the PMOS XMP devices at VDD,
 * whose gates are fixed at VBP_CAS, must be able to pass Itail/2: Icap_P = 0.5*kp*(W_CAS/L_CAS)*(VDD - VBP_CAS - |VTp|)^2.
-* If Icap_P < Itail/2 the PMOS side starves (pl/out collapse toward ground or the stack settles in a near-zero-current state);
-* if Icap_P >> Itail/2 XMP goes to the triode region and the output rises to VDD. Match them first.
+* If Icap_P < Itail/2 the PMOS side cannot carry the branch current: the closed loop unbalances the pair (input offset = delta_I/gm1)
+* until a device leaves saturation, or the stack settles in a near-zero-current state; if Icap_P >> Itail/2 the loop absorbs the surplus the
+* same way. Keep Icap_P close to Itail/2.
 * Headroom (VDD = 1.8 V): V(tail) >= VDSAT_tail; V(a) = V(tail) + Vds_in >= V(tail) + VDSAT_in; XMC gate VBN_CAS ~ V(a) + Vgs_C;
 * out >= V(a) + VDSAT_C; XML diode sits below XMP: V(left) = V(pl) - Vsg_L with V(pl) <= VDD - |VDSAT_P|.
 * Input common mode 0.9 V: V(tail) = 0.9 - Vgs_in; a larger input overdrive (smaller W_IN/L_IN) shrinks the room for the tail and cascode.
 * Telescopic stacks cannot tolerate wasted voltage: use short L only where gain allows; check each Vds against the dc_acceptance margins.
-* Performance: A0 ~ gm1*(Rout_up || Rout_down), UGB ~ gm1/(2*pi*CL), PM normally high. Power ~ VDD*Itail (no fold branch).
+* Performance: A0 ~ gm1*(Rout_up || Rout_down), UGB ~ gm1/(2*pi*C_out) with C_out = CL + parasitics at out, PM normally high. Power ~ VDD*Itail (no fold branch).
 *
-* Tunable parameters: the .param lines annotated "; tune MIN..MAX [UNIT] [int]" (everything else is fixed).
 .param W_IN=20          ; tune 1..100 um
 .param L_IN=0.5         ; tune 0.15..2 um
 .param W_CAS=12         ; tune 1..100 um

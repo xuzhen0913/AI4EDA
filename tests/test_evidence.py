@@ -8,7 +8,8 @@ M = dict(analysis_mode='dc', simulation_valid=True, dc_passed=False, metrics={'p
                          vds_or_vsd_v=.5, vth_magnitude_v=.6, vdsat_magnitude_v=.1, overdrive_v=.11, saturation_margin_v=.4),
              'XM7': dict(passed=False, checks=dict(conducting=True, saturation=False), id_a=2e-5, vgs_or_vsg_v=1.07,
                          vds_or_vsd_v=.1, vth_magnitude_v=1.0, vdsat_magnitude_v=.117, overdrive_v=.067, saturation_margin_v=-.014),
-             'XM9': dict(passed=False, reason='Missing or nonfinite DC diagnostics')}))
+             'XM9': dict(passed=False, reason='Missing or nonfinite DC diagnostics')},
+         loop=dict(passed=False, output_error_v=-0.4123456, maximum_output_error_v=0.05)))
 
 
 def test_one_merged_device_table_replaces_three_overlapping_ones():
@@ -26,10 +27,15 @@ def test_summary_nodes_and_rounding():
     assert s['metrics'] == {'power_w': 0.00012346, 'ugb_hz': None} and s['failed_metrics'] == [] and 'failed_dc_devices' not in s
     assert 'metrics' not in measurement_summary(M, metrics=False)
     assert 'errors' not in s and s['warnings'] == ['warning: x']
+    assert s['output_error_v'] == -0.41235 and s['loop_regulated'] is False       # DC failed although the device rows may pass
+    healthy = {**M, 'dc_acceptance': {**M['dc_acceptance'], 'loop': dict(passed=True, output_error_v=0.0004, maximum_output_error_v=0.05)}}
+    assert measurement_summary(healthy)['output_error_v'] == 0.0004 and 'loop_regulated' not in measurement_summary(healthy)
+    assert 'output_error_v' not in measurement_summary({**M, 'dc_acceptance': {**M['dc_acceptance'], 'loop': None}})
     assert node_voltages(M) == {'out': 1.6974, 'n1': 0.73402}
     assert sig(0) == 0 and sig(None) is None and sig(123456.789) == 123460.0
     assert outcome(dict(dc_passed=True, failed_dc_devices=[], metrics={'a': 1.23456789}, simulation_number=3)) == \
         dict(dc_passed=True, failed_dc_devices=[], metrics={'a': 1.2346})
+    assert outcome(dict(dc_passed=False, failed_dc_devices=[], metrics={}, loop_regulated=False))['loop_regulated'] is False
 
 
 def test_residual_log_keeps_only_information_not_in_structured_fields():
