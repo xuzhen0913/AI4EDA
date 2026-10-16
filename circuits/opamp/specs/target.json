@@ -7,7 +7,6 @@
     "input_common_mode_v": 0.9,
     "load_capacitance_f": 2e-12
   },
-  "reference_tags": ["cascode"],
   "targets": {
     "dc_gain_db": {"min": 75},
     "ugb_hz": {"min": 60000000},

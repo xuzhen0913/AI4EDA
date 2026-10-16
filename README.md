@@ -16,23 +16,118 @@
 整个流程**只有这三个 Agent**，没有“每个 reference 一个专用 sizing agent”。三个 Agent 的 prompt、代码、公式手册里**没有任何具体电路的信息**
 （器件名、参数名、拓扑名）；唯一含具体拓扑信息的地方是 `circuits/opamp/reference/*.spice`（`tests/test_references.py` 用正则强制检查这一点）。
 
+### 图 1：整体流程（轮次、返工路由、设计记忆、ngspice）
+
+图中：蓝色 = Agent（调用模型）；橙色 = ngspice 仿真；绿色 = 设计记忆 `design_memory.txt`；虚线 = 数据读取，实线 = 控制流。
+
+```mermaid
+flowchart TD
+    classDef agent fill:#dbeafe,stroke:#1d4ed8,color:#000
+    classDef sim fill:#ffedd5,stroke:#c2410c,color:#000
+    classDef mem fill:#dcfce7,stroke:#15803d,color:#000
+    classDef code fill:#f3f4f6,stroke:#6b7280,color:#000
+
+    IN["输入：target.json（规格、预算、DC 判据）<br/>+ reference 库（profile、@verified、@levers、.param）"]:::code
+    START["启动检查 + 归档<br/>check_budgets / load_references / check_library<br/>上一次 results 整体移入 results/runs/时间戳<br/>按 reference_tags 过滤候选"]:::code
+    MEM[("design_memory.txt<br/>设计记忆<br/>每个（电路类型, reference, 工作条件）一节<br/>P / F / D 点，去重后每节 ≤30 点")]:::mem
+
+    IN --> START --> ROUND
+
+    ROUND{"第 n 轮（n ≤ max_rounds ≤ 3）<br/>n = 1 或上轮判 fail_topology ?"}:::code
+    ROUND -- "是" --> TOPO
+    ROUND -- "否：上轮 fail_sizing，拓扑不变" --> SIZSTART
+
+    MEM -. "每个候选的 memory 摘要<br/>（点数、DC 失败数、最好一行及其对当前 specs 的缺口）" .-> TOPO
+    TOPO["① 拓扑选择 Agent<br/>依据 profile + verified_points + memory 摘要<br/>排除已判失败的拓扑，返回 selected id、排名、理由、风险"]:::agent
+    TOPO --> SIZSTART
+
+    SIZSTART["确定 sizing 起点<br/>新选拓扑 → reference 初值<br/>fail_sizing → 上轮最优点（DC 通过且总缺口最小），没有则回到 reference<br/>并带上审核意见 diagnosis + revision_advice"]:::code
+    MEM -. "sizing 输入的 memory：同 reference 同条件最好 8 行<br/>+ 少量 DC 失败点；known_points 用于拒绝重复仿真和整体试点" .-> SIZ
+    SIZSTART --> SIZ
+
+    SIZ["② 尺寸优化（一次 sizing run，详见图 2）<br/>DC 修复 ≤ 5 次决策；总决策 ≤ 10 次<br/>尺寸优化 Agent 每次只提一个 change（DC 修复可至多 4 个）"]:::agent
+    SIZ <== "每次决策都要仿真" ==> NG
+    NG["ngspice 仿真<br/>testbench.py 由 target.json + 电路自身生成完整网表：<br/>闭环求直流工作点 → 逐 MOS 饱和 + |V(out)−VCM| 检查<br/>→ 开环 AC 测 增益 / UGB / PM / 功耗<br/>ngspice_runner.py 解析，每次存 logs/simulation_NNN.{spice,log,json}"]:::sim
+
+    SIZ --> OUT["交出最优点（不是最后一步）<br/>candidate.spice + history.json + 最终实测"]:::code
+    OUT --> CHECK["Python 逐项对比 spec_check<br/>（以数值为准）"]:::code
+    CHECK --> REV["③ 性能审核 Agent<br/>输入：spec_check、被选 profile、器件表/节点电压/参数（贴边界标记）、sizing 每步改动与结果<br/>只返回 verdict；diagnosis 与 revision_advice 由程序生成"]:::agent
+    REV --> RULE{"一致性校验<br/>说 pass 但有指标不达标 → 改判 fail_sizing<br/>fail_* 必须有非空修改意见"}:::code
+
+    RULE --> REMEMBER["ReviewAgent.remember<br/>把本轮仿真过的所有点<br/>（起点、被回退的点、跳转点、成功与失败）写入记忆<br/>先去重（4% 调参范围）再限额"]:::code
+    REMEMBER ==> MEM
+
+    REMEMBER --> V{"verdict"}:::code
+    V -- "pass" --> DONE["targets_passed<br/>输出 summary.json + final_report.pdf + final_report_zh.pdf"]:::code
+    V -- "fail_topology：记入 excluded" --> LIMIT
+    V -- "fail_sizing" --> LIMIT
+    LIMIT{"n < max_rounds ?"}:::code
+    LIMIT -- "是：n+1" --> ROUND
+    LIMIT -- "否" --> MAXR["max_rounds_reached<br/>报告里照实记录每一轮"]:::code
+    MAXR --> PDF["同样生成中英文 PDF"]:::code
 ```
-specs + 全部 reference 的 profile
-        │
-        ▼
- ┌────────────────┐   选中的 reference
- │ 拓扑选择 Agent │ ───────────────┐
- └────────────────┘                ▼
-        ▲                 ┌────────────────┐  DC≤5 次，总决策≤10 次（每次 sizing）
-        │ fail_topology   │ 尺寸优化 Agent │  先 DC 修复，再性能优化，全部由真实 ngspice 验证
-        │ + 修改意见      └────────────────┘
-        │                         │ 最终网表 + 日志 + 历史 + 实测
-        │                         ▼
-        │                 ┌────────────────┐
-        └──────────────── │ 性能审核 Agent │ ── pass ──► 结束，输出 PDF
-              fail_sizing └────────────────┘
-              + 修改意见 ──► 回到尺寸优化 Agent（本轮不再重选拓扑）
+
+### 图 2：一次 sizing run 的内部（贪心爬山 + 程序兜底 + 设计记忆 + ngspice）
+
+图中橙色节点 = 每次都调用 ngspice；蓝色 = 调用模型；绿色 = 使用设计记忆。
+
+```mermaid
+flowchart TD
+    classDef agent fill:#dbeafe,stroke:#1d4ed8,color:#000
+    classDef sim fill:#ffedd5,stroke:#c2410c,color:#000
+    classDef mem fill:#dcfce7,stroke:#15803d,color:#000
+    classDef code fill:#f3f4f6,stroke:#6b7280,color:#000
+
+    A["起点网表（reference 初值或上轮最优点）"]:::code --> B["ngspice 仿真起点<br/>记入 visited，更新 best"]:::sim
+    B --> LOOP
+
+    LOOP{"循环入口：当前实测"}:::code
+    LOOP -- "全部指标达标" --> E1["targets_passed"]:::code
+    LOOP -- "DC 未通过且 DC 决策 ≥ 5" --> E2["dc_iteration_limit → 交出最优点"]:::code
+    LOOP -- "已计费决策 ≥ 10" --> E3["max_iterations_reached → 交出最优点"]:::code
+    LOOP -- "否则继续" --> PH{"DC 通过？"}:::code
+
+    PH -- "否：DC 修复阶段" --> M1
+    PH -- "是：性能阶段" --> M2
+
+    M1{"还剩记忆步数（≤2）且记忆里有<br/>DC 通过过的设计？"}:::mem
+    M1 -- "是" --> MS1["phase = memory：整体试最近的一个<br/>（不调模型，占 DC 预算；仍 DC 失败就撤销）"]:::mem
+    M1 -- "否" --> ASK
+
+    M2{"记忆里有满足当前 specs 的设计<br/>且步数 ≤2？"}:::mem
+    M2 -- "是" --> MS2["phase = memory：整体试最近的一个<br/>（不调模型；变差则撤销，不计入连续回退）"]:::mem
+    M2 -- "否" --> M3
+    M3{"连续 3 次回退 且 跳转次数 ≤2？"}:::code
+    M3 -- "是" --> JMP["phase = explore：随机大幅跳转<br/>至多 3 个参数，各移动 ≥35%（再 25%、15%，宽范围按对数）"]:::code
+    JMP <== "每个候选先做只含 DC 的筛选" ==> SC["ngspice DC-only 仿真"]:::sim
+    JMP --> APPLY
+    M3 -- "否" --> ASK
+
+    ASK["尺寸优化 Agent 提案<br/>输入：规格、网表、最新实测、history、memory、手册章节（按阶段）<br/>性能阶段 1 个 change，DC 修复阶段至多 4 个"]:::agent
+    ASK --> VAL{"程序校验：夹到范围、整数取整；<br/>已仿真点 / 与当前值相同 / 违反有效 W-L / 已关闭方向 → 拒绝"}:::code
+    VAL -- "通过" --> APPLY
+    VAL -- "拒绝：带原因重问，最多 2 次，不占预算<br/>重复同一提案则不再问" --> ASK
+    VAL -- "仍无可用提案" --> FB["fallback：按 reference 的 @levers<br/>走缺口最大指标的下一个未试杠杆<br/>（DC 阶段只用 dc 杠杆）"]:::code
+    FB -- "找到杠杆" --> APPLY
+    FB -- "没有可走的杠杆：免费拒绝<br/>（每轮前 3 次不占预算、不仿真）" --> LOOP
+
+    MS1 --> APPLY
+    MS2 --> APPLY
+    APPLY["写入 candidate.spice"]:::code --> SIM["ngspice 仿真（真实 SKY130）<br/>解析指标 + DC 检查"]:::sim
+    SIM --> FU{"follow_up：<br/>性能步使总缺口变大，或使 DC 由通过变失败？"}:::code
+    FU -- "是：回退到上一个点<br/>该方向关闭，stall + 1<br/>（回退不消耗 DC 预算）" --> NB
+    FU -- "否：接受，stall 清零" --> NB
+    NB["note_best：更新最优点<br/>（DC 通过且总缺口最小）<br/>history.json 追加一行 + vs_previous"]:::code --> LOOP
 ```
+
+**每一轮按顺序发生的事**
+
+1. **选拓扑**（第 1 轮，或上轮 `fail_topology`）：拓扑 Agent 读 profile、`verified_points`（程序已与当前 specs 比较）和 memory 摘要，选一个 reference。
+2. **确定起点**：新拓扑从 reference 初值开始；`fail_sizing` 则从上轮最优点开始并带审核意见。
+3. **sizing**：先 ngspice 仿真起点；DC 不通过就修复（最多 5 次决策），通过后做性能优化（总决策最多 10 次）。每一步都由真实 ngspice 验证，模型只提一个参数改动，其余确定性动作（夹范围、拒绝重复、回退、fallback、跳转、记忆整体试点）由程序完成。
+4. **审核**：程序先逐项对比数值，再由审核 Agent 给 `verdict`；数值与结论矛盾时以数值为准。
+5. **写记忆**：无论通过与否，本轮仿真过的所有点都写入 `design_memory.txt`，供之后的拓扑选择、sizing 起点修复和整体试点使用（也供下一次运行使用）。
+6. **路由**：`pass` 结束；`fail_topology` 把该拓扑排除后重选；`fail_sizing` 沿用拓扑继续；3 轮后仍未通过则 `max_rounds_reached`。
 
 - **整体流程最多 3 轮**（`target.json → budgets.max_rounds`，要求 1…3）。一轮 = （需要时）选拓扑 → 一次完整 sizing → 审核。
 - **每次 sizing** 仍遵循原来的次数：先 DC，DC 修复累计最多 5 次（`max_dc_iterations`）；DC 通过后做性能优化，该次 sizing 总决策最多 10 次（`max_iterations`）。
